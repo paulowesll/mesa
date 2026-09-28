@@ -36,6 +36,9 @@
 #define S_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(x) (((unsigned)(x) & 0x1) << 5)
 #define G_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(x) (((x) >> 5) & 0x1)
 
+/* The GS output primitive type; the GFX11 VGT_GS_OUT_PRIM_TYPE offset (0x30998) is something else. */
+#define R_030904_MGFX4_VGT_GS_OUT_PRIM_TYPE    0x030904
+
 /* Viewports use the GFX12 layout from here: XSCALE, XOFFSET, YSCALE, YOFFSET, ZSCALE, ZOFFSET,
  * ZMIN and ZMAX for each viewport.
  */

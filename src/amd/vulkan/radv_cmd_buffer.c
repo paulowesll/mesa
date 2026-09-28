@@ -3847,7 +3847,13 @@ radv_emit_vgt_gs_out(struct radv_cmd_buffer *cmd_buffer, uint32_t vgt_gs_out_pri
    struct radv_cmd_stream *cs = cmd_buffer->cs;
 
    radeon_begin(cs);
-   if (pdev->info.gfx_level >= GFX11) {
+   if (pdev->info.is_xclipse) {
+      /* Written for geometry shaders only, as the vendor driver does: left at its default (points),
+       * every strip a GS emitted was rasterised as one point.
+       */
+      const bool has_gs = !!cmd_buffer->state.shaders[MESA_SHADER_GEOMETRY];
+      radeon_set_uconfig_reg(R_030904_MGFX4_VGT_GS_OUT_PRIM_TYPE, has_gs ? vgt_gs_out_prim_type : 0);
+   } else if (pdev->info.gfx_level >= GFX11) {
       radeon_set_uconfig_reg(R_030998_VGT_GS_OUT_PRIM_TYPE, vgt_gs_out_prim_type);
    } else {
       radeon_opt_set_context_reg(R_028A6C_VGT_GS_OUT_PRIM_TYPE, AC_TRACKED_VGT_GS_OUT_PRIM_TYPE, vgt_gs_out_prim_type);

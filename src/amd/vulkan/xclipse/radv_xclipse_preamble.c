@@ -17,11 +17,11 @@
 #include "radv_xclipse_native_defaults.h"
 
 #include "util/macros.h"
+#include "ac_mgfx4_regs.h"
 #include "ac_pm4.h"
 #include "sid.h"
 
 /* MGFX4 registers without a GFX11 name (UCONFIG and raw context dword offsets). */
-#define MGFX4_UCONFIG_VGT_GS_OUT_PRIM_TYPE 0x241 /* see the geometry shader path */
 #define MGFX4_UCONFIG_GE_VRS_RATE          0x263
 #define MGFX4_UCONFIG_SIMD_CONFIG          0x480 /* 8 pairs */
 #define MGFX4_UCONFIG_490                  0x490
@@ -65,7 +65,7 @@ radv_xclipse_add_native_state(struct ac_pm4_state *pm4)
    /* Front-end setup of the vendor driver: primitive and index state, the SIMD configuration
     * and cache control registers of MGFX4, and the scissor/clip rectangles.
     */
-   add_uconfig(pm4, MGFX4_UCONFIG_VGT_GS_OUT_PRIM_TYPE, 0);
+   add_uconfig(pm4, (R_030904_MGFX4_VGT_GS_OUT_PRIM_TYPE - CIK_UCONFIG_REG_OFFSET) >> 2, 0);
    add_uconfig(pm4, (R_030908_VGT_PRIMITIVE_TYPE - CIK_UCONFIG_REG_OFFSET) >> 2, 0);
    add_uconfig(pm4, (R_03092C_GE_MULTI_PRIM_IB_RESET_EN - CIK_UCONFIG_REG_OFFSET) >> 2, 0);
    ac_pm4_cmd_add(pm4, PKT3(PKT3_SET_UCONFIG_REG_INDEX, 1, 0));
