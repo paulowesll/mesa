@@ -1041,7 +1041,7 @@ schedule_ilp(Program* program)
 void
 schedule_vopd(Program* program)
 {
-   if (program->gfx_level < GFX11 || program->wave_size != 32)
+   if (program->gfx_level < GFX11 || program->wave_size != 32 || program->dev.has_vopd_hang)
       return;
 
    SchedILPContext ctx = {program};

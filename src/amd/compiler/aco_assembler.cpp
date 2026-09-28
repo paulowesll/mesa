@@ -997,6 +997,8 @@ emit_exp_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instruc
 
    if (ctx.gfx_level >= GFX11) {
       encoding |= exp.row_en ? 0b1 << 13 : 0;
+      if (ctx.program->dev.has_export_valid_mask_bit)
+         encoding |= exp.valid_mask ? 0b1 << 12 : 0;
    } else {
       encoding |= exp.valid_mask ? 0b1 << 12 : 0;
       encoding |= exp.compressed ? 0b1 << 10 : 0;

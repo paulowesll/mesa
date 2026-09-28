@@ -2307,6 +2307,13 @@ struct DeviceInfo {
    bool has_gfx6_mrt_export_bug = false;
    bool has_desc_resource_level = false;
 
+   /* Samsung Xclipse deviations from the GFX11 ISA (see init_program). */
+   bool has_export_valid_mask_bit = false;
+   bool has_vopd_hang = false;
+   bool has_rtz_cvt_pkrtz_fusion_bug = false;
+   bool has_gl1_sa_scope_glc = false;
+   bool needs_mem_ordered = false;
+
    int32_t scratch_global_offset_min;
    int32_t scratch_global_offset_max;
    unsigned max_nsa_vgprs;

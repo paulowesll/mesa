@@ -1455,7 +1455,13 @@ visit_load_per_vertex_input(isel_context* ctx, nir_intrinsic_instr* instr)
 ac_hw_cache_flags
 get_cache_flags(isel_context* ctx, unsigned access, enum ac_access_type type)
 {
-   return ac_get_hw_cache_flags(ctx->program->gfx_level, (gl_access_qualifier)access, type);
+   ac_hw_cache_flags flags = ac_get_hw_cache_flags(ctx->program->gfx_level, (gl_access_qualifier)access, type);
+
+   if (ctx->program->dev.has_gl1_sa_scope_glc && type == ac_access_type_load &&
+       (access & (ACCESS_COHERENT | ACCESS_VOLATILE)))
+      flags.value |= ac_dlc;
+
+   return flags;
 }
 
 ac_hw_cache_flags

@@ -1120,7 +1120,7 @@ insert_waitcnt(Program* program)
       insert_wait_entry(in_ctx[0], def, event_vmem, vmem_nosampler, 0xffffffff);
    }
 
-   program->config->mem_ordered = false;
+   program->config->mem_ordered = program->dev.needs_mem_ordered;
 
    for (unsigned i = 0; i < program->blocks.size();) {
       Block& current = program->blocks[i++];

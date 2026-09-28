@@ -5640,7 +5640,7 @@ try_convert_sopc_to_sopk(aco_ptr<Instruction>& instr)
 static void
 opt_split_cvt_pkrtz(opt_ctx& ctx, aco_ptr<Instruction>& instr)
 {
-   if (instr->isDPP() || instr->isSDWA())
+   if (instr->isDPP() || instr->isSDWA() || ctx.program->dev.has_rtz_cvt_pkrtz_fusion_bug)
       return;
 
    if (instr->definitions[0].regClass() != v1 && instr->definitions[0].regClass() != v2b)

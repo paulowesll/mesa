@@ -123,6 +123,25 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
 
    program->dev.has_desc_resource_level = options->compiler_info->has_desc_resource_level;
 
+   if (options->compiler_info->is_xclipse) {
+      /* Exports still take the valid mask from bit 12, as on GFX10: without it the DB ignores
+       * the kill, and discarded fragments write depth.
+       */
+      program->dev.has_export_valid_mask_bit = true;
+      /* Any VOPD instruction hangs the GPU, even a lone v_dual_mov_b32 pair. */
+      program->dev.has_vopd_hang = true;
+      /* The vendor rounds the fp32 result (RNE) before the RTZ conversion to f16; folding them
+       * into one RTZ operation exports 127 * (1/127) as 0x3bff instead of 1.0.
+       */
+      program->dev.has_rtz_cvt_pkrtz_fusion_bug = true;
+      /* GL1 follows GFX10.3: GLC alone is shader-array scope, so device-coherent loads also
+       * need DLC.
+       */
+      program->dev.has_gl1_sa_scope_glc = true;
+      /* Memory returns out of order unless MEM_ORDERED is set, and GPU hangs followed. */
+      program->dev.needs_mem_ordered = true;
+   }
+
    if (program->gfx_level >= GFX12) {
       program->dev.scratch_global_offset_min = -8388608;
       program->dev.scratch_global_offset_max = 8388607;
