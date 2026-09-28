@@ -76,6 +76,7 @@ enum radv_drm_device_type {
    RADV_DRM_DEVICE_AMDGPU,
    RADV_DRM_DEVICE_AMDGPU_VPIPE,
    RADV_DRM_DEVICE_VIRTIO,
+   RADV_DRM_DEVICE_SGPU, /* Samsung Xclipse, only with -Dradv-xclipse=true */
 };
 
 struct radv_physical_device {

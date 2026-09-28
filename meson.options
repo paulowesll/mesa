@@ -767,6 +767,14 @@ option(
 )
 
 option(
+  'radv-xclipse',
+  type : 'boolean',
+  value : false,
+  description : 'Build RADV support for Samsung Xclipse (SGPU) GPUs. ' +
+                'Needs the vendor libdrm_sgpu.so at runtime; other devices are unaffected.'
+)
+
+option(
   'radeonsi-build-id',
   type : 'string',
   value : '',

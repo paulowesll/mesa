@@ -40,6 +40,9 @@ typedef void *drmDevicePtr;
 #include "drm-uapi/amdgpu_drm.h"
 #include "util/os_drm.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
+#if RADV_XCLIPSE
+#include "xclipse/radv_xclipse.h"
+#endif
 #endif
 #include "git_sha1.h"
 
@@ -1813,7 +1816,7 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
       .apiVersion = pdev->info.gfx_level >= GFX8 ? RADV_API_VERSION : RADV_API_VERSION_1_3,
 #endif
       .driverVersion = vk_get_driver_version(),
-      .vendorID = ATI_VENDOR_ID,
+      .vendorID = pdev->info.vendor_id ? pdev->info.vendor_id : ATI_VENDOR_ID,
       .deviceID = pdev->info.pci_id,
       .deviceType = device_type,
       .maxImageDimension1D = pdev->image_props.max_dims.width,
@@ -2617,6 +2620,13 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
                        "Could not get the kernel driver version for device %s: %m", path);
    }
 
+#if RADV_XCLIPSE
+   /* Samsung's kernel driver names the node "sgpu", or "amdgpu" on a platform (non-PCI) bus. */
+   if (!strcmp(version->name, "sgpu") ||
+       (drm_device->bustype == DRM_BUS_PLATFORM && !strcmp(version->name, "amdgpu"))) {
+      drm_device_type = RADV_DRM_DEVICE_SGPU;
+   } else
+#endif
    if (!strcmp(version->name, "amdgpu")) {
       drm_device_type = RADV_DRM_DEVICE_AMDGPU;
 #ifdef HAVE_AMDGPU_VIRTIO
@@ -2672,7 +2682,12 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
    struct radeon_winsys_info winsys_info;
 
-   result = radv_amdgpu_winsys_query_info(fd, instance->debug_flags, is_virtio, &winsys_info);
+#if RADV_XCLIPSE
+   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU)
+      result = radv_xclipse_query_info(fd, &winsys_info);
+   else
+#endif
+      result = radv_amdgpu_winsys_query_info(fd, instance->debug_flags, is_virtio, &winsys_info);
    if (result != VK_SUCCESS) {
       result = vk_errorf(instance, result, "failed to query GPU info");
       goto fail;
@@ -2703,7 +2718,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    pdev->sync_types[num_sync_types++] = NULL;
    pdev->vk.supported_sync_types = pdev->sync_types;
 
-   if (instance->vk.enabled_extensions.KHR_display) {
+   /* The SGPU primary node does not answer AMDGPU_INFO_ACCEL_WORKING. */
+   if (instance->vk.enabled_extensions.KHR_display && pdev->drm_device_type != RADV_DRM_DEVICE_SGPU) {
       pdev->wsi_master_fd = open(drm_device->nodes[DRM_NODE_PRIMARY], O_RDWR | O_CLOEXEC);
       if (pdev->wsi_master_fd >= 0) {
          uint32_t accel_working = 0;
@@ -2965,6 +2981,10 @@ create_drm_physical_device(struct vk_instance *vk_instance, struct _drmDevice *d
 #ifdef HAVE_AMDGPU_VIRTIO
    supported_device |= device->bustype == DRM_BUS_PCI && device->deviceinfo.pci->vendor_id == VIRTGPU_PCI_VENDOR_ID;
    supported_device |= device->bustype == DRM_BUS_PLATFORM; /* virtio-mmio */
+#endif
+
+#if RADV_XCLIPSE
+   supported_device |= device->bustype == DRM_BUS_PLATFORM; /* Samsung Xclipse */
 #endif
 
    supported_device |= device->bustype == DRM_BUS_PCI && device->deviceinfo.pci->vendor_id == ATI_VENDOR_ID;
@@ -3261,6 +3281,10 @@ radv_query_heap_info(struct radv_physical_device *pdev, struct radeon_winsys_hea
    int r;
 
    memset(heap_info, 0, sizeof(*heap_info));
+
+   /* The SGPU node rejects libdrm_amdgpu's authenticated heap queries. */
+   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU)
+      return;
 
    simple_mtx_lock(&pdev->drm_device_mtx);
    radv_create_drm_device_locked(pdev);

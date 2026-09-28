@@ -1452,6 +1452,10 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    VkResult result;
    struct radv_device *device;
 
+   /* TODO(xclipse): removed once the SGPU winsys lands; enumeration already works. */
+   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU)
+      return vk_errorf(pdev, VK_ERROR_INITIALIZATION_FAILED, "the Xclipse SGPU winsys is not available yet");
+
    bool overallocation_disallowed = false;
 
    vk_foreach_struct_const (sType, ext, pCreateInfo->pNext) {

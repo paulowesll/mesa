@@ -275,6 +275,17 @@ if radv_u_trace
   radv_flags += '-DRADV_U_TRACE=1'
 endif
 
+if get_option('radv-xclipse')
+  if with_platform_windows
+    error('radv-xclipse needs the DRM (Linux/Android) winsys')
+  endif
+  libradv_files += files(
+    'xclipse/radv_xclipse.h',
+    'xclipse/radv_xclipse_device.c',
+  )
+  radv_flags += '-DRADV_XCLIPSE=1'
+endif
+
 libvulkan_radeon = shared_library(
   'vulkan_radeon',
   [libradv_files, radv_entrypoints, radv_drirc, sha1_h, bvh_spv, radv_annotate_layer],
