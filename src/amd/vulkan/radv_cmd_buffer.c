@@ -13722,6 +13722,11 @@ radv_emit_msaa_state(struct radv_cmd_buffer *cmd_buffer)
       pdev->info.gfx_level >= GFX11 && pdev->info.gfx_level < GFX12 && render->ds_att.format == VK_FORMAT_UNDEFINED;
    const uint32_t gfx11_null_db_z_info = S_028040_FORMAT(V_028040_Z_INVALID) | S_028040_NUM_SAMPLES(log_samples);
 
+   /* With ALTERNATE_RBS_PER_TILE, Xclipse ignores the right and bottom edges of the viewport
+    * scissor. The vendor driver leaves it clear.
+    */
+   const bool alternate_rbs_per_tile = pdev->info.gfx_level >= GFX9 && !pdev->info.is_xclipse;
+
    radeon_begin(cmd_buffer->cs);
    if (pdev->info.gfx_level >= GFX12) {
       gfx12_begin_context_regs();
@@ -13730,7 +13735,7 @@ radv_emit_msaa_state(struct radv_cmd_buffer *cmd_buffer)
       gfx12_opt_set_context_reg(R_028BE0_PA_SC_AA_CONFIG, AC_TRACKED_PA_SC_AA_CONFIG, pa_sc_aa_config);
       gfx12_opt_set_context_reg(
          R_028A48_PA_SC_MODE_CNTL_0, AC_TRACKED_PA_SC_MODE_CNTL_0,
-         S_028A48_ALTERNATE_RBS_PER_TILE(pdev->info.gfx_level >= GFX9) | S_028A48_VPORT_SCISSOR_ENABLE(1) |
+         S_028A48_ALTERNATE_RBS_PER_TILE(alternate_rbs_per_tile) | S_028A48_VPORT_SCISSOR_ENABLE(1) |
             S_028A48_LINE_STIPPLE_ENABLE(d->vk.rs.line.stipple.enable) | S_028A48_MSAA_ENABLE(msaa_enable));
       gfx12_opt_set_context_reg(R_02807C_DB_ALPHA_TO_MASK, AC_TRACKED_DB_ALPHA_TO_MASK, db_alpha_to_mask);
       gfx12_opt_set_context_reg(R_028C5C_PA_SC_SAMPLE_PROPERTIES, AC_TRACKED_PA_SC_SAMPLE_PROPERTIES,
@@ -13746,7 +13751,7 @@ radv_emit_msaa_state(struct radv_cmd_buffer *cmd_buffer)
       gfx11_opt_set_context_reg(R_028BE0_PA_SC_AA_CONFIG, AC_TRACKED_PA_SC_AA_CONFIG, pa_sc_aa_config);
       gfx11_opt_set_context_reg(
          R_028A48_PA_SC_MODE_CNTL_0, AC_TRACKED_PA_SC_MODE_CNTL_0,
-         S_028A48_ALTERNATE_RBS_PER_TILE(pdev->info.gfx_level >= GFX9) | S_028A48_VPORT_SCISSOR_ENABLE(1) |
+         S_028A48_ALTERNATE_RBS_PER_TILE(alternate_rbs_per_tile) | S_028A48_VPORT_SCISSOR_ENABLE(1) |
             S_028A48_LINE_STIPPLE_ENABLE(d->vk.rs.line.stipple.enable) | S_028A48_MSAA_ENABLE(msaa_enable));
       gfx11_opt_set_context_reg(R_028B70_DB_ALPHA_TO_MASK, AC_TRACKED_DB_ALPHA_TO_MASK, db_alpha_to_mask);
       gfx11_opt_set_context_reg(R_028804_DB_EQAA, AC_TRACKED_DB_EQAA, db_eqaa);
@@ -13761,7 +13766,7 @@ radv_emit_msaa_state(struct radv_cmd_buffer *cmd_buffer)
       radeon_opt_set_context_reg(R_028BE0_PA_SC_AA_CONFIG, AC_TRACKED_PA_SC_AA_CONFIG, pa_sc_aa_config);
       radeon_opt_set_context_reg(
          R_028A48_PA_SC_MODE_CNTL_0, AC_TRACKED_PA_SC_MODE_CNTL_0,
-         S_028A48_ALTERNATE_RBS_PER_TILE(pdev->info.gfx_level >= GFX9) | S_028A48_VPORT_SCISSOR_ENABLE(1) |
+         S_028A48_ALTERNATE_RBS_PER_TILE(alternate_rbs_per_tile) | S_028A48_VPORT_SCISSOR_ENABLE(1) |
             S_028A48_LINE_STIPPLE_ENABLE(d->vk.rs.line.stipple.enable) | S_028A48_MSAA_ENABLE(msaa_enable));
       radeon_opt_set_context_reg(R_028B70_DB_ALPHA_TO_MASK, AC_TRACKED_DB_ALPHA_TO_MASK, db_alpha_to_mask);
       radeon_opt_set_context_reg(R_028804_DB_EQAA, AC_TRACKED_DB_EQAA, db_eqaa);
