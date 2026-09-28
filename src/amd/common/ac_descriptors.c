@@ -540,7 +540,8 @@ ac_build_gfx10_texture_descriptor(const struct radeon_info *info, const struct a
     * In SRV mode, BASE_ARRAY is ignored and DEPTH is the last slice of mipmap level 0.
     * In UAV mode, BASE_ARRAY is the first slice and DEPTH is the last slice of the bound level.
     */
-   desc[5] = S_00A014_ARRAY_PITCH(state->gfx10.uav3d) | S_00A014_PERF_MOD(4);
+   /* Xclipse image fetches return zeros with PERF_MOD 4; its vendor driver uses 7. */
+   desc[5] = S_00A014_ARRAY_PITCH(state->gfx10.uav3d) | S_00A014_PERF_MOD(info->is_xclipse ? 7 : 4);
    desc[6] = 0;
    desc[7] = 0;
 
