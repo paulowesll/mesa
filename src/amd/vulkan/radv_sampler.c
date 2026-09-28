@@ -242,6 +242,15 @@ radv_make_sampler_descriptor(const struct radv_compiler_info *compiler_info,
    };
 
    ac_build_sampler_descriptor(compiler_info->ac->gfx_level, &ac_state, desc);
+
+   /* PERF_MIP, ANISO_THRESHOLD and ANISO_BIAS set the AMD way make anisotropic sampling on Xclipse
+    * noisier than plain trilinear, and a non-zero PERF_MIP also breaks trilinear LOD fractions.
+    * With all three zero, anisotropic results are bit-identical to the vendor driver.
+    */
+   if (compiler_info->ac->is_xclipse) {
+      desc[0] &= C_008F30_ANISO_THRESHOLD & C_008F30_ANISO_BIAS;
+      desc[1] &= C_008F34_PERF_MIP;
+   }
 }
 
 VkResult

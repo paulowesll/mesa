@@ -493,6 +493,23 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
    if (vk_acceleration_struct_vtx_format_supported(format))
       buffer |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
 
+   /* Xclipse samples depth, 16-bit UNORM/SNORM and 32-bit float channels with nearest filtering
+    * even when the sampler asks for linear, and its vendor driver does not expose linear filtering
+    * for them.
+    */
+   if (pdev->info.is_xclipse) {
+      bool no_filter = vk_format_has_depth(format);
+      for (unsigned c = 0; c < desc->nr_channels; c++) {
+         if ((desc->channel[c].size == 16 && desc->channel[c].normalized) ||
+             (desc->channel[c].size == 32 && desc->channel[c].type == UTIL_FORMAT_TYPE_FLOAT))
+            no_filter = true;
+      }
+      if (no_filter) {
+         tiled &= ~VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+         linear &= ~VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+      }
+   }
+
    /* addrlib does not support linear compressed textures. */
    if (vk_format_is_compressed(format))
       linear = 0;
@@ -1016,7 +1033,9 @@ radv_get_image_format_properties(struct radv_physical_device *pdev, const VkPhys
         (VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
        !(image_flags & VK_IMAGE_CREATE_2_CUBE_COMPATIBLE_BIT_KHR) &&
        !(image_usage & VK_IMAGE_USAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)) {
-      sampleCounts |= VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT;
+      sampleCounts |= VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT;
+      if (!pdev->info.is_xclipse) /* no 8x MSAA */
+         sampleCounts |= VK_SAMPLE_COUNT_8_BIT;
    }
 
    if (tiling == VK_IMAGE_TILING_LINEAR && vk_format_is_96bit(format)) {
