@@ -1,0 +1,6 @@
+# Android + X11 (Termux-style) builds: the Android HAL module plus the loader
+# ICD interface, see vulkan-icd-android-symbols.txt and vulkan-icd-symbols.txt.
+HMI
+vk_icdGetInstanceProcAddr
+vk_icdGetPhysicalDeviceProcAddr
+vk_icdNegotiateLoaderICDInterfaceVersion

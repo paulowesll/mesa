@@ -6,7 +6,15 @@ vk_api_xml = files('registry/vk.xml')
 vulkan_icd_link_args = []
 vulkan_icd_link_depends = []
 
-if with_platform_android
+if with_platform_android and with_platform_x11
+  # Android + X11 is a Termux-style userspace: drivers are loaded by the Vulkan loader
+  # (or adrenotools) as ICDs, so export the ICD entry points next to the HAL module.
+  vulkan_icd_symbols = files('vulkan-icd-android-icd-symbols.txt')
+  if with_ld_version_script
+    vulkan_icd_link_args += ['-Wl,--version-script', join_paths(meson.current_source_dir(), 'vulkan-android-icd.sym')]
+    vulkan_icd_link_depends += files('vulkan-android-icd.sym')
+  endif
+elif with_platform_android
   vulkan_icd_symbols = files('vulkan-icd-android-symbols.txt')
   if with_ld_version_script
     vulkan_icd_link_args += ['-Wl,--version-script', join_paths(meson.current_source_dir(), 'vulkan-android.sym')]

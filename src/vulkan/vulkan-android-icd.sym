@@ -1,0 +1,15 @@
+{
+	global:
+		# Android HAL module (see vulkan-android.sym).
+		HMI;
+		# Loader ICD interface, for Android + X11 (Termux-style) builds that are
+		# loaded as plain Vulkan ICDs.
+		vk_icdGetInstanceProcAddr;
+		vk_icdGetPhysicalDeviceProcAddr;
+		vk_icdNegotiateLoaderICDInterfaceVersion;
+
+	local:
+		# When static linking LLVM, all its symbols are public API.
+		# That may cause symbol collision, so explicitly demote everything.
+		*;
+};
