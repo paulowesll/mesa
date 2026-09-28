@@ -12,6 +12,7 @@
 #include "meta/radv_meta.h"
 #include "nir/nir.h"
 #include "nir/nir_builder.h"
+#include "nir/nir_builtin_builder.h"
 #include "nir/nir_xfb_info.h"
 #include "nir/radv_meta_nir.h"
 #include "nir/radv_nir.h"
@@ -451,6 +452,37 @@ struct radv_lower_ycbcr_state {
    const struct vk_sampler_state_array *embedded_samplers;
 };
 
+/* Xclipse: rewrite a biased sample (image_sample_b) as an explicit-LOD one with the LOD computed
+ * and the bias added, which is equivalent.  Games hung the GPU in fragment shaders with
+ * image_sample_b.
+ */
+static bool
+radv_xclipse_lower_txb_instr(nir_builder *b, nir_tex_instr *tex, void *data)
+{
+   if (tex->op != nir_texop_txb || nir_tex_instr_src_index(tex, nir_tex_src_bias) < 0)
+      return false;
+
+   b->cursor = nir_before_instr(&tex->instr);
+
+   nir_def *lod = nir_get_texture_lod(b, tex);
+   nir_def *bias = nir_steal_tex_src(tex, nir_tex_src_bias);
+   lod = nir_fadd(b, lod, nir_f2fN(b, bias, lod->bit_size));
+
+   nir_def *min_lod = nir_steal_tex_src(tex, nir_tex_src_min_lod);
+   if (min_lod)
+      lod = nir_fmax(b, lod, min_lod);
+
+   nir_tex_instr_add_src(tex, nir_tex_src_lod, lod);
+   tex->op = nir_texop_txl;
+   return true;
+}
+
+static bool
+radv_xclipse_lower_txb(nir_shader *nir)
+{
+   return nir_shader_tex_pass(nir, radv_xclipse_lower_txb_instr, nir_metadata_control_flow, NULL);
+}
+
 static const struct vk_ycbcr_conversion_state *
 ycbcr_conversion_lookup(const void *data, uint32_t set, uint32_t binding, uint32_t array_index)
 {
@@ -741,6 +773,9 @@ radv_shader_spirv_to_nir(const struct radv_compiler_info *compiler_info, struct 
    };
 
    NIR_PASS(_, nir, nir_lower_tex, &tex_options);
+
+   if (compiler_info->ac->is_xclipse && nir->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, radv_xclipse_lower_txb);
 
    static const nir_lower_image_options image_options = {
       .lower_cube_size = true,
