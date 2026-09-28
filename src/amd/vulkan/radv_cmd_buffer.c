@@ -7867,8 +7867,12 @@ radv_is_primitive_restart_enabled(struct radv_cmd_buffer *cmd_buffer, const stru
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
 
-   /* Primitive restart is automatically disabled by HW on GFX11+, see DISABLE_FOR_AUTO_INDEX. */
-   return (draw_info->indexed || pdev->info.gfx_level >= GFX11) && d->vk.ia.primitive_restart_enable;
+   /* Primitive restart is automatically disabled by HW on GFX11+, see DISABLE_FOR_AUTO_INDEX.
+    * Xclipse ignores that bit: a non-indexed strip drawn with restart enabled drops every auto index
+    * equal to the restart index.
+    */
+   return (draw_info->indexed || (pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse)) &&
+          d->vk.ia.primitive_restart_enable;
 }
 
 static void
