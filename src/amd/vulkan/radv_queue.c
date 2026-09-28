@@ -21,6 +21,10 @@
 #include "vk_semaphore.h"
 #include "vk_sync.h"
 
+#if RADV_XCLIPSE
+#include "xclipse/radv_xclipse.h"
+#endif
+
 #include "ac_cmdbuf.h"
 #include "ac_debug.h"
 #include "ac_descriptors.h"
@@ -693,7 +697,7 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
    bool has_clear_state = pdev->info.has_clear_state;
    int i;
 
-   struct ac_pm4_state *pm4 = ac_pm4_create_sized(&pdev->info, false, 512, false);
+   struct ac_pm4_state *pm4 = ac_pm4_create_sized(&pdev->info, false, RADV_GFX_PREAMBLE_MAX_DW(pdev), false);
    if (!pm4)
       return;
 
@@ -706,6 +710,11 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
          ac_pm4_cmd_add(pm4, PKT3(PKT3_CLEAR_STATE, 0, 0));
          ac_pm4_cmd_add(pm4, 0);
       }
+
+#if RADV_XCLIPSE
+      if (pdev->info.is_xclipse)
+         radv_xclipse_add_native_state(pm4);
+#endif
    }
 
    const struct ac_preamble_state preamble_state = {
@@ -722,7 +731,7 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
    }
 
    if (!has_clear_state) {
-      ac_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
+      ac_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE, pdev->info.is_xclipse ? 0xaa99aaaa : 0xAAAAAAAA);
    }
 
    if (pdev->info.gfx_level <= GFX8)
@@ -817,7 +826,8 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
       ac_pm4_set_reg(pm4, R_028000_DB_RENDER_CONTROL, 0);
    }
 
-   if (pdev->info.family >= CHIP_NAVI31 && pdev->info.family <= CHIP_STRIX1) {
+   /* Not on Xclipse, whose DCC is GFX10.3-style: its native state sets CB_FDCC_CONTROL. */
+   if (pdev->info.family >= CHIP_NAVI31 && pdev->info.family <= CHIP_STRIX1 && !pdev->info.is_xclipse) {
       /* Disable SINGLE clear codes on GFX11 (including first GFX11.5 rev) to workaround a hw bug
        * with DCC. */
       ac_pm4_set_reg(pm4, R_028424_CB_FDCC_CONTROL, S_028424_DISABLE_CONSTANT_ENCODE_SINGLE(1));
@@ -1032,7 +1042,7 @@ radv_update_preamble_cs(struct radv_queue_state *queue, struct radv_device *devi
       if (result != VK_SUCCESS)
          goto fail;
 
-      radeon_check_space(ws, cs->b, 512);
+      radeon_check_space(ws, cs->b, RADV_GFX_PREAMBLE_MAX_DW(pdev));
       dest_cs[i] = cs;
 
       if (scratch_bo)
@@ -1252,7 +1262,8 @@ radv_update_preambles(struct radv_queue_state *queue, struct radv_device *device
    needs.scratch_size_per_wave = ac_compute_scratch_wavesize(&pdev->info, needs.scratch_size_per_wave);
    needs.compute_scratch_size_per_wave = ac_compute_scratch_wavesize(&pdev->info, needs.compute_scratch_size_per_wave);
 
-   if (pdev->info.gfx_level >= GFX11 && queue->qf == RADV_QUEUE_GENERAL) {
+   /* Xclipse has no attribute ring. */
+   if (pdev->info.gfx_level >= GFX11 && queue->qf == RADV_QUEUE_GENERAL && !pdev->info.is_xclipse) {
       needs.ge_rings = true;
    }
 

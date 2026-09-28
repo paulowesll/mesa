@@ -116,6 +116,11 @@ void radv_queue_finish(struct radv_queue *queue);
 
 enum radeon_ctx_priority radv_get_queue_global_priority(const VkDeviceQueueGlobalPriorityCreateInfo *pObj);
 
+/* Upper bound of the graphics preamble size; on Xclipse it starts with the register defaults of
+ * the vendor driver.
+ */
+#define RADV_GFX_PREAMBLE_MAX_DW(pdev) ((pdev)->info.is_xclipse ? 2048 : 512)
+
 void radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs);
 
 bool radv_queue_internal_submit(struct radv_queue *queue, struct ac_cmdbuf *cs);

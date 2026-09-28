@@ -287,6 +287,8 @@ if get_option('radv-xclipse')
     'winsys/sgpu/radv_sgpu_winsys_public.h',
     'xclipse/radv_xclipse.h',
     'xclipse/radv_xclipse_device.c',
+    'xclipse/radv_xclipse_native_defaults.h',
+    'xclipse/radv_xclipse_preamble.c',
   )
   radv_flags += '-DRADV_XCLIPSE=1'
 endif

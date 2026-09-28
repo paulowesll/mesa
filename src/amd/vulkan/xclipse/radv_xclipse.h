@@ -18,6 +18,7 @@
 
 #include <vulkan/vulkan_core.h>
 
+struct ac_pm4_state;
 struct radeon_winsys_info;
 
 /* PCI-style vendor ID reported for the device. */
@@ -25,5 +26,8 @@ struct radeon_winsys_info;
 
 /* Queries the device through the vendor library; submits no work. */
 VkResult radv_xclipse_query_info(int fd, struct radeon_winsys_info *info);
+
+/* Adds the register state a graphics preamble starts with. */
+void radv_xclipse_add_native_state(struct ac_pm4_state *pm4);
 
 #endif /* RADV_XCLIPSE_H */

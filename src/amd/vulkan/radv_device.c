@@ -1733,7 +1733,10 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
          goto fail;
    }
 
-   if (pdev->info.has_graphics && !RADV_DEBUG(instance, NO_IB_CHAINING))
+   /* On Xclipse, draws did not see the state of a preamble called as a nested IB; it is emitted
+    * inline instead, as the vendor driver does.
+    */
+   if (pdev->info.has_graphics && !RADV_DEBUG(instance, NO_IB_CHAINING) && !pdev->info.is_xclipse)
       radv_create_gfx_preamble(device);
 
    if (device->vk.enabled_features.performanceCounterQueryPools) {
