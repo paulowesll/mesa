@@ -54,6 +54,7 @@ radv_cs_emit_cache_flush(struct radeon_winsys *ws, struct radv_cmd_stream *cs, e
       .wait_mem_va = flush_va,
       .wait_mem_number = flush_cnt,
       .eop_bug_va = gfx9_eop_bug_va,
+      .cb_db_flush_wait_mem = cs->cb_db_flush_wait_mem && flush_cnt && flush_va,
    };
 
    radeon_check_space(ws, cs->b, 128);
@@ -68,6 +69,12 @@ radv_init_cmd_stream(const struct radv_device *device, struct radv_cmd_stream *c
 
    cs->buffered_sh_regs.num = 0;
    cs->hw_ip = ip_type;
+
+   /* The vendor driver waits for PWS events in ME without cache operations, and RADV's PWS
+    * encoding left Unreal Engine titles waiting forever after a render target switch.  A memory
+    * fence wait, as on GFX10, is what games ran with.
+    */
+   cs->cb_db_flush_wait_mem = pdev->info.is_xclipse;
 
    ac_init_tracked_regs(&cs->tracked_regs, &pdev->info, false);
 }

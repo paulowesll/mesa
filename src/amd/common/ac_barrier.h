@@ -99,6 +99,9 @@ struct ac_barrier_state {
    uint64_t wait_mem_va;
    uint32_t *wait_mem_number;
    uint64_t eop_bug_va;
+
+   /* GFX11+: wait for CB/DB flushes through wait_mem_va, as GFX10 does, instead of a PWS event. */
+   bool cb_db_flush_wait_mem;
 };
 
 void

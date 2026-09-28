@@ -449,6 +449,9 @@ struct radv_cmd_stream {
 
    enum amd_ip_type hw_ip;
 
+   /* Xclipse: wait for CB/DB flushes through a memory fence instead of PWS. */
+   bool cb_db_flush_wait_mem;
+
    struct ac_buffered_sh_regs buffered_sh_regs;
 };
 

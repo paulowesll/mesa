@@ -160,7 +160,7 @@ ac_gfx10_emit_barrier(struct ac_cmdbuf *cs, enum amd_gfx_level gfx_level,
       /* First flush CB/DB, then L1/L2. */
       gcr_cntl |= S_587_SEQ(V_587_SEQ_FORWARD);
 
-      if (gfx_level >= GFX11) {
+      if (gfx_level >= GFX11 && !state->cb_db_flush_wait_mem) {
          /* Send an event that flushes caches. */
          ac_emit_cp_release_mem_pws(cs, gfx_level, ip_type, cb_db_event,
                                     gcr_cntl & C_587_GLI_INV);
