@@ -153,6 +153,12 @@ radv_compute_queue_enabled(const struct radv_physical_device *pdev)
    if (pdev->info.gfx_level == GFX6)
       return false;
 
+   /* Dispatches on the Xclipse compute rings launch no waves while their fences signal. The vendor
+    * driver exposes a single queue family.
+    */
+   if (pdev->info.is_xclipse)
+      return false;
+
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
    return pdev->info.ip[AMD_IP_COMPUTE].num_queues > 0 &&
@@ -3058,7 +3064,8 @@ radv_get_physical_device_queue_family_properties(struct radv_physical_device *pd
             VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT;
          *pQueueFamilyProperties[idx] = (VkQueueFamilyProperties){
             .queueFlags = gfx_flags | radv_queue_family_protected_flag(pdev, RADV_QUEUE_GENERAL),
-            .queueCount = 1,
+            /* Xclipse exposes each graphics ring as a queue, like its vendor driver. */
+            .queueCount = pdev->info.is_xclipse ? pdev->info.ip[AMD_IP_GFX].num_queues : 1,
             .timestampValidBits = 64,
             .minImageTransferGranularity = (VkExtent3D){1, 1, 1},
          };
