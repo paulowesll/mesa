@@ -293,7 +293,8 @@ radv_is_dcc_disabled(const struct radv_physical_device *pdev)
 {
    const struct radv_instance *instance = radv_physical_device_instance(pdev);
 
-   return RADV_DEBUG(instance, NO_DCC) || pdev->drirc.debug.disable_dcc;
+   /* Xclipse's CB DCC follows GFX10.3, not the GFX11 programming. */
+   return RADV_DEBUG(instance, NO_DCC) || pdev->drirc.debug.disable_dcc || pdev->info.is_xclipse;
 }
 
 static bool

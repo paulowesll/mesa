@@ -109,6 +109,12 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device, const struct radv
    if (pdev->info.gfx_level == GFX9 && image->vk.samples == 4 && format == VK_FORMAT_D16_UNORM)
       return false;
 
+   /* Xclipse texture fetches from TC-compatible HTILE MSAA depth return wrong values (0.0 at 4x
+    * and 8x); the vendor driver decompresses MSAA depth before shader reads.
+    */
+   if (pdev->info.is_xclipse && image->vk.samples >= 2)
+      return false;
+
    return true;
 }
 
@@ -923,6 +929,10 @@ radv_image_can_fast_clear(const struct radv_device *device, const struct radv_im
 
    if (vk_format_is_color(image->vk.format)) {
       if (!radv_image_has_cmask(image) && !radv_image_has_dcc(image))
+         return false;
+
+      /* CMASK fast clears hang the Xclipse CB after some frames and render black. */
+      if (pdev->info.is_xclipse && !radv_image_has_dcc(image))
          return false;
 
       /* RB+ doesn't work with CMASK fast clear on Stoney. */
