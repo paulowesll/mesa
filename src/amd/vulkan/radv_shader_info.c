@@ -438,7 +438,7 @@ radv_get_output_masks(const struct nir_shader *nir, const struct radv_graphics_s
 }
 
 static void
-radv_set_vs_output_param(enum amd_gfx_level gfx_level, const struct nir_shader *nir,
+radv_set_vs_output_param(enum amd_gfx_level gfx_level, bool is_xclipse, const struct nir_shader *nir,
                          const struct radv_graphics_state_key *gfx_state, struct radv_shader_info *info,
                          bool export_prim_id, bool export_clip_cull_dists)
 {
@@ -455,8 +455,11 @@ radv_set_vs_output_param(enum amd_gfx_level gfx_level, const struct nir_shader *
    /* Implicit primitive ID for VS and TES is added by ac_nir_lower_legacy_vs / ac_nir_lower_ngg,
     * it can be configured as either a per-vertex or per-primitive output depending on the GPU.
     */
-   const bool implicit_prim_id_per_prim =
-      export_prim_id && info->is_ngg && gfx_level >= GFX10_3 && nir->info.stage == MESA_SHADER_VERTEX;
+   /* On Xclipse, the per-primitive export reaches the PS as the ID of another primitive; the
+    * per-vertex path matches the vendor driver.
+    */
+   const bool implicit_prim_id_per_prim = export_prim_id && info->is_ngg && gfx_level >= GFX10_3 &&
+                                          nir->info.stage == MESA_SHADER_VERTEX && !is_xclipse;
    const bool implicit_prim_id_per_vertex =
       export_prim_id && !implicit_prim_id_per_prim &&
       (nir->info.stage == MESA_SHADER_VERTEX || nir->info.stage == MESA_SHADER_TESS_EVAL);
@@ -1323,8 +1326,11 @@ gfx10_get_ngg_info(const struct radv_compiler_info *compiler_info, struct radv_s
    const unsigned gs_vertices_out = gs_info ? gs_info->gs.vertices_out : 0;
    ac_ngg_subgroup_info info;
 
+   /* Xclipse targets 64-thread NGG workgroups, like the vendor driver. */
+   const unsigned target_workgroup_size = compiler_info->ac->is_xclipse ? 64 : 128;
+
    ac_ngg_compute_subgroup_info(gfx_level, es_info->stage, !!gs_info, input_prim, gs_vertices_out, gs_num_invocations,
-                                128, 256, stage_info->wave_size, es_info->esgs_itemsize,
+                                target_workgroup_size, 256, stage_info->wave_size, es_info->esgs_itemsize,
                                 stage_info->ngg_lds_vertex_size, stage_info->ngg_lds_scratch_size, false, 0, &info);
 
    out->hw_max_esverts = info.hw_max_esverts;
@@ -1447,8 +1453,8 @@ radv_link_shaders_info(const struct radv_compiler_info *compiler_info, struct ra
       const bool ps_prim_id_in = !fs_stage || fs_stage->info.ps.prim_id_input;
       const bool ps_clip_dists_in = !fs_stage || !!fs_stage->info.ps.input_clips_culls_mask;
 
-      radv_set_vs_output_param(compiler_info->ac->gfx_level, prerast_stage->nir, gfx_state, &prerast_stage->info,
-                               ps_prim_id_in, ps_clip_dists_in);
+      radv_set_vs_output_param(compiler_info->ac->gfx_level, compiler_info->ac->is_xclipse, prerast_stage->nir,
+                               gfx_state, &prerast_stage->info, ps_prim_id_in, ps_clip_dists_in);
    }
 
    if (prerast_stage && !ms_stage) {

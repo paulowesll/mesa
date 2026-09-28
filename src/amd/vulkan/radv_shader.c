@@ -1918,6 +1918,10 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, struct radv_shader 
       }
 
       regs->ge_pc_alloc = S_030980_OVERSUB_EN(oversub_pc_lines > 0) | S_030980_NUM_PC_LINES(oversub_pc_lines - 1);
+
+      /* Xclipse has no late alloc, so no parameter cache oversubscription; the vendor writes 0. */
+      if (pdev->info.is_xclipse && !oversub_pc_lines)
+         regs->ge_pc_alloc = 0;
    }
 
    unsigned idx_format = V_028708_SPI_SHADER_1COMP;
