@@ -10,6 +10,7 @@
 #include <inttypes.h>
 
 #include "ac_cmdbuf_base.h"
+#include "ac_mgfx4_ctxreg_remap.h"
 #include "ac_pm4.h"
 #include "sid.h"
 
@@ -344,12 +345,23 @@ struct ac_tracked_regs {
       ac_cmdbuf_emit(value);                                            \
    } while (0)
 
-/* Packet building helpers for CONTEXT registers. */
-#define ac_cmdbuf_set_ctx_reg_seq(reg, num) __ac_cmdbuf_set_reg_seq(reg, num, 0, SI_CONTEXT, PKT3_SET_CONTEXT_REG, 0)
+/* Packet building helpers for CONTEXT registers.  On Xclipse the offset of the first register
+ * is translated to the MGFX4 layout; the registers written together by one sequence stay
+ * contiguous there.
+ */
+#define __ac_cmdbuf_ctx_reg(reg)                                                                   \
+   (__cs->remap_ctx_regs                                                                           \
+       ? SI_CONTEXT_REG_OFFSET + (ac_mgfx4_remap_ctx_offset(((reg) - SI_CONTEXT_REG_OFFSET) >> 2) << 2) \
+       : (unsigned)(reg))
 
-#define ac_cmdbuf_set_ctx_reg(reg, value) __ac_cmdbuf_set_reg(reg, 0, value, SI_CONTEXT, PKT3_SET_CONTEXT_REG)
+#define ac_cmdbuf_set_ctx_reg_seq(reg, num)                                                        \
+   __ac_cmdbuf_set_reg_seq(__ac_cmdbuf_ctx_reg(reg), num, 0, SI_CONTEXT, PKT3_SET_CONTEXT_REG, 0)
 
-#define ac_cmdbuf_set_ctx_reg_idx(reg, idx, value) __ac_cmdbuf_set_reg(reg, idx, value, SI_CONTEXT, PKT3_SET_CONTEXT_REG)
+#define ac_cmdbuf_set_ctx_reg(reg, value)                                                          \
+   __ac_cmdbuf_set_reg(__ac_cmdbuf_ctx_reg(reg), 0, value, SI_CONTEXT, PKT3_SET_CONTEXT_REG)
+
+#define ac_cmdbuf_set_ctx_reg_idx(reg, idx, value)                                                 \
+   __ac_cmdbuf_set_reg(__ac_cmdbuf_ctx_reg(reg), idx, value, SI_CONTEXT, PKT3_SET_CONTEXT_REG)
 
 /* Packet building helpers for SH registers. */
 #define ac_cmdbuf_set_sh_reg_seq(reg, num) __ac_cmdbuf_set_reg_seq(reg, num, 0, SI_SH, PKT3_SET_SH_REG, 0)

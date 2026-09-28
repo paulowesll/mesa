@@ -379,6 +379,10 @@ void ac_pm4_set_reg(struct ac_pm4_state *state, unsigned reg, uint32_t val)
       opcode = PKT3_SET_CONTEXT_REG;
       reg -= SI_CONTEXT_REG_OFFSET;
 
+      /* Xclipse (MGFX4) context register layout. */
+      if (state->info && state->info->is_xclipse)
+         reg = ac_mgfx4_remap_ctx_offset(reg >> 2) << 2;
+
    } else if (reg >= CIK_UCONFIG_REG_OFFSET && reg < CIK_UCONFIG_REG_END) {
       opcode = PKT3_SET_UCONFIG_REG;
       reg -= CIK_UCONFIG_REG_OFFSET;

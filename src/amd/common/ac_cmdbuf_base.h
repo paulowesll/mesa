@@ -15,6 +15,11 @@ struct ac_cmdbuf {
    uint32_t *buf;        /* The base pointer of the chunk. */
 
    bool context_roll;
+
+   /* Samsung Xclipse (MGFX4): context registers are emitted at their MGFX4 offsets, see
+    * ac_mgfx4_ctxreg_remap.h.  Set by the SGPU winsys.
+    */
+   bool remap_ctx_regs;
 };
 
 #endif

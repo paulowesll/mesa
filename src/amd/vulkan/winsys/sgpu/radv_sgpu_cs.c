@@ -128,6 +128,7 @@ radv_sgpu_cs_create(struct radeon_winsys *_ws, enum amd_ip_type ip_type, bool is
    cs->ip_type = ip_type;
    cs->status = VK_SUCCESS;
    cs->base.max_dw = initial_dw;
+   cs->base.remap_ctx_regs = true;
    return &cs->base;
 }
 
