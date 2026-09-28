@@ -462,10 +462,18 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
    uint64_t gtt_size = (uint64_t)pdev->info.gart_size_kb * 1024;
    int vram_index = -1, visible_vram_index = -1, gart_index = -1;
 
+   /* Xclipse has no VRAM: all of its memory is one GTT heap, which is device local, as the vendor
+    * driver reports it.
+    */
+   const VkMemoryHeapFlags gtt_heap_flags = pdev->info.is_xclipse ? VK_MEMORY_HEAP_DEVICE_LOCAL_BIT : 0;
+   const VkMemoryPropertyFlags gtt_type_flags = pdev->info.is_xclipse ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT : 0;
+
    pdev->memory_properties.memoryHeapCount = 0;
    pdev->heaps = 0;
 
-   if (!pdev->info.has_dedicated_vram) {
+   if (pdev->info.is_xclipse) {
+      /* Keep the GTT heap as it is. */
+   } else if (!pdev->info.has_dedicated_vram) {
       const uint64_t total_size = gtt_size + visible_vram_size;
 
       if (pdev->drirc.performance.enable_unified_heap_on_apu) {
@@ -507,7 +515,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
       pdev->heaps |= RADV_HEAP_GTT;
       pdev->memory_properties.memoryHeaps[gart_index] = (VkMemoryHeap){
          .size = gtt_size,
-         .flags = 0,
+         .flags = gtt_heap_flags,
       };
    }
 
@@ -538,11 +546,25 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
       };
    }
 
+   /* With every type host visible, applications that persistently map host-visible memory (DXVK)
+    * put textures in mapped chunks, and 32-bit applications run out of address space.  Offer a
+    * device-local type that is not mappable first.
+    */
+   if (pdev->info.is_xclipse && gart_index >= 0) {
+      pdev->memory_domains[type_count] = RADEON_DOMAIN_GTT;
+      pdev->memory_flags[type_count] = 0;
+      pdev->memory_properties.memoryTypes[type_count++] = (VkMemoryType){
+         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+         .heapIndex = gart_index,
+      };
+   }
+
    if (gart_index >= 0) {
       pdev->memory_domains[type_count] = RADEON_DOMAIN_GTT;
       pdev->memory_flags[type_count] = RADEON_FLAG_GTT_WC | RADEON_FLAG_CPU_ACCESS;
       pdev->memory_properties.memoryTypes[type_count++] = (VkMemoryType){
-         .propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+         .propertyFlags =
+            gtt_type_flags | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
          .heapIndex = gart_index,
       };
    }
@@ -568,7 +590,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
       pdev->memory_domains[type_count] = RADEON_DOMAIN_GTT;
       pdev->memory_flags[type_count] = RADEON_FLAG_CPU_ACCESS;
       pdev->memory_properties.memoryTypes[type_count++] = (VkMemoryType){
-         .propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+         .propertyFlags = gtt_type_flags | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
                           VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
          .heapIndex = gart_index,
       };
@@ -576,7 +598,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
       pdev->memory_domains[type_count] = RADEON_DOMAIN_GTT;
       pdev->memory_flags[type_count] = RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_32BIT;
       pdev->memory_properties.memoryTypes[type_count++] = (VkMemoryType){
-         .propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+         .propertyFlags = gtt_type_flags | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
                           VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
          .heapIndex = gart_index,
       };
@@ -620,14 +642,14 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
          pdev->memory_domains[type_count] = RADEON_DOMAIN_GTT;
          pdev->memory_flags[type_count] = RADEON_FLAG_ENCRYPTED;
          pdev->memory_properties.memoryTypes[type_count++] = (VkMemoryType){
-            .propertyFlags = VK_MEMORY_PROPERTY_PROTECTED_BIT,
+            .propertyFlags = gtt_type_flags | VK_MEMORY_PROPERTY_PROTECTED_BIT,
             .heapIndex = gart_index,
          };
 
          pdev->memory_domains[type_count] = RADEON_DOMAIN_GTT;
          pdev->memory_flags[type_count] = RADEON_FLAG_ENCRYPTED | RADEON_FLAG_32BIT;
          pdev->memory_properties.memoryTypes[type_count++] = (VkMemoryType){
-            .propertyFlags = VK_MEMORY_PROPERTY_PROTECTED_BIT,
+            .propertyFlags = gtt_type_flags | VK_MEMORY_PROPERTY_PROTECTED_BIT,
             .heapIndex = gart_index,
          };
       }
@@ -3328,7 +3350,16 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
     * Note that the application heap usages are not really accurate (eg.
     * in presence of shared buffers).
     */
-   if (!pdev->info.has_dedicated_vram) {
+   if (pdev->info.is_xclipse) {
+      /* One GTT heap; the SGPU node does not report heap usage. */
+      assert(pdev->heaps == RADV_HEAP_GTT && memory_properties->memoryHeapCount == 1);
+      const uint64_t heap_size = memory_properties->memoryHeaps[0].size;
+      const uint64_t internal_usage = heap_info.allocated_gtt;
+      const uint64_t total_usage = MAX2(internal_usage, heap_info.gtt_usage);
+
+      memoryBudget->heapBudget[0] = heap_size - MIN2(heap_size, total_usage) + internal_usage;
+      memoryBudget->heapUsage[0] = internal_usage;
+   } else if (!pdev->info.has_dedicated_vram) {
       if (pdev->drirc.performance.enable_unified_heap_on_apu) {
          /* When the heaps are unified, only the visible VRAM heap is exposed on APUs. */
          assert(pdev->heaps == RADV_HEAP_VRAM_VIS);
