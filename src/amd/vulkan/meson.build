@@ -286,11 +286,23 @@ if get_option('radv-xclipse')
     'winsys/sgpu/radv_sgpu_winsys.h',
     'winsys/sgpu/radv_sgpu_winsys_public.h',
     'xclipse/radv_xclipse.h',
+    'xclipse/radv_xclipse_bc.c',
     'xclipse/radv_xclipse_device.c',
     'xclipse/radv_xclipse_native_defaults.h',
     'xclipse/radv_xclipse_preamble.c',
   )
   radv_flags += '-DRADV_XCLIPSE=1'
+
+  libradv_files += custom_target(
+    'bc_decoder_spv.h',
+    input : 'xclipse/shaders/bc_decoder.glsl',
+    output : 'bc_decoder_spv.h',
+    command : [
+      prog_glslang, '-V', '-S', 'comp', '-x', '-o', '@OUTPUT@', '@INPUT@',
+      glslang_quiet, glslang_depfile,
+    ],
+    depfile : 'bc_decoder_spv.h.d',
+  )
 endif
 
 libvulkan_radeon = shared_library(

@@ -7,6 +7,10 @@
  */
 
 #include "radv_meta.h"
+
+#if RADV_XCLIPSE
+#include "xclipse/radv_xclipse.h"
+#endif
 #include "tools/radv_debug_nir.h"
 #include "radv_shader_object.h"
 
@@ -382,6 +386,14 @@ radv_device_init_meta(struct radv_device *device)
          return result;
    }
 
+#if RADV_XCLIPSE
+   if (pdev->info.is_xclipse) {
+      result = radv_xclipse_bc_init(device);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+#endif
+
    return VK_SUCCESS;
 }
 
@@ -397,6 +409,10 @@ radv_device_finish_meta(struct radv_device *device)
       if (device->meta_state.astc_decode)
          vk_texcompress_astc_finish(&device->vk, &device->meta_state.alloc, device->meta_state.astc_decode);
    }
+
+#if RADV_XCLIPSE
+   radv_xclipse_bc_finish(device);
+#endif
 
    vk_common_DestroyPipelineCache(radv_device_to_handle(device), device->meta_state.cache, NULL);
    mtx_destroy(&device->meta_state.mtx);

@@ -93,6 +93,9 @@ struct radv_meta_state {
 
    struct vk_texcompress_astc_state *astc_decode;
 
+   /* Xclipse BC4-BC7 emulation (xclipse/radv_xclipse_bc.c). */
+   struct radv_xclipse_bc_state *xclipse_bc;
+
    struct vk_meta_device device;
 };
 

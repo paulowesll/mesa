@@ -388,6 +388,11 @@ radv_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToIm
                                   &pCopyBufferToImageInfo->pRegions[r].imageSubresource,
                                   pCopyBufferToImageInfo->pRegions[r].imageOffset,
                                   pCopyBufferToImageInfo->pRegions[r].imageExtent);
+         } else if (format_layout == UTIL_FORMAT_LAYOUT_RGTC || format_layout == UTIL_FORMAT_LAYOUT_BPTC) {
+            radv_meta_decode_bc(cmd_buffer, dst_image, pCopyBufferToImageInfo->dstImageLayout,
+                                &pCopyBufferToImageInfo->pRegions[r].imageSubresource,
+                                pCopyBufferToImageInfo->pRegions[r].imageOffset,
+                                pCopyBufferToImageInfo->pRegions[r].imageExtent);
          } else {
             radv_meta_decode_etc(cmd_buffer, dst_image, pCopyBufferToImageInfo->dstImageLayout,
                                  &pCopyBufferToImageInfo->pRegions[r].imageSubresource,
@@ -447,6 +452,9 @@ radv_CmdCopyMemoryToImageKHR(VkCommandBuffer commandBuffer, const VkCopyDeviceMe
          if (format_layout == UTIL_FORMAT_LAYOUT_ASTC) {
             radv_meta_decode_astc(cmd_buffer, dst_image, region->imageLayout, &region->imageSubresource,
                                   region->imageOffset, region->imageExtent);
+         } else if (format_layout == UTIL_FORMAT_LAYOUT_RGTC || format_layout == UTIL_FORMAT_LAYOUT_BPTC) {
+            radv_meta_decode_bc(cmd_buffer, dst_image, region->imageLayout, &region->imageSubresource,
+                                region->imageOffset, region->imageExtent);
          } else {
             radv_meta_decode_etc(cmd_buffer, dst_image, region->imageLayout, &region->imageSubresource,
                                  region->imageOffset, region->imageExtent);
@@ -903,6 +911,10 @@ radv_CmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2 *pCopyI
             radv_meta_decode_astc(cmd_buffer, dst_image, pCopyImageInfo->dstImageLayout,
                                   &pCopyImageInfo->pRegions[r].dstSubresource, pCopyImageInfo->pRegions[r].dstOffset,
                                   dst_extent);
+         } else if (format_layout == UTIL_FORMAT_LAYOUT_RGTC || format_layout == UTIL_FORMAT_LAYOUT_BPTC) {
+            radv_meta_decode_bc(cmd_buffer, dst_image, pCopyImageInfo->dstImageLayout,
+                                &pCopyImageInfo->pRegions[r].dstSubresource, pCopyImageInfo->pRegions[r].dstOffset,
+                                dst_extent);
          } else {
             radv_meta_decode_etc(cmd_buffer, dst_image, pCopyImageInfo->dstImageLayout,
                                  &pCopyImageInfo->pRegions[r].dstSubresource, pCopyImageInfo->pRegions[r].dstOffset,

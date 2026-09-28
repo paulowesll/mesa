@@ -19,6 +19,7 @@
 #include <vulkan/vulkan_core.h>
 
 struct ac_pm4_state;
+struct radv_device;
 struct radeon_winsys_info;
 struct vk_device_extension_table;
 struct vk_features;
@@ -32,6 +33,10 @@ VkResult radv_xclipse_query_info(int fd, struct radeon_winsys_info *info);
 /* Hide what does not work on Xclipse and its vendor driver does not expose either. */
 void radv_xclipse_fixup_extensions(struct vk_device_extension_table *ext);
 void radv_xclipse_fixup_features(struct vk_features *features);
+
+/* BC4-BC7 emulation state (radv_meta_decode_bc). */
+VkResult radv_xclipse_bc_init(struct radv_device *device);
+void radv_xclipse_bc_finish(struct radv_device *device);
 
 /* Adds the register state a graphics preamble starts with. */
 void radv_xclipse_add_native_state(struct ac_pm4_state *pm4);

@@ -552,10 +552,15 @@ radv_image_get_plane_format(const struct radv_physical_device *pdev, const struc
    if (radv_is_format_emulated(pdev, image->vk.format)) {
       if (plane == 0)
          return image->vk.format;
-      if (radv_format_description(image->vk.format)->layout == UTIL_FORMAT_LAYOUT_ASTC)
+      switch (radv_format_description(image->vk.format)->layout) {
+      case UTIL_FORMAT_LAYOUT_ASTC:
          return vk_texcompress_astc_emulation_format(image->vk.format);
-      else
+      case UTIL_FORMAT_LAYOUT_RGTC:
+      case UTIL_FORMAT_LAYOUT_BPTC:
+         return radv_bc_emulation_format(pdev, image->vk.format);
+      default:
          return vk_texcompress_etc2_emulation_format(image->vk.format);
+      }
    }
 
    return vk_format_get_plane_format(image->vk.format, plane);

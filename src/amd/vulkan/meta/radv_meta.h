@@ -355,6 +355,18 @@ void radv_meta_decode_etc_indirect(struct radv_cmd_buffer *cmd_buffer,
 void radv_meta_decode_astc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
                            const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent);
 
+#if RADV_XCLIPSE
+void radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
+                         const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent);
+#else
+static inline void
+radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
+                    const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent)
+{
+   UNREACHABLE("BC formats are only emulated on Xclipse");
+}
+#endif
+
 uint32_t radv_fill_buffer(struct radv_cmd_buffer *cmd_buffer, struct radeon_winsys_bo *bo, uint64_t va, uint64_t size,
                           uint32_t value);
 

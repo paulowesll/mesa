@@ -273,6 +273,30 @@ radv_is_copy_image_indirect_format_supported(const struct radv_physical_device *
    return true;
 }
 
+/* Xclipse samples BC1-BC3, but returns zeros for BC4, BC5 and BC7, so they are emulated: plane 1
+ * holds the decoded texels.  Returns the format of plane 1, or VK_FORMAT_UNDEFINED when the format is
+ * not emulated.
+ */
+VkFormat
+radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat format)
+{
+   if (!pdev->info.is_xclipse)
+      return VK_FORMAT_UNDEFINED;
+
+   switch (format) {
+   case VK_FORMAT_BC4_UNORM_BLOCK:
+   case VK_FORMAT_BC4_SNORM_BLOCK:
+   case VK_FORMAT_BC5_UNORM_BLOCK:
+   case VK_FORMAT_BC5_SNORM_BLOCK:
+   case VK_FORMAT_BC7_UNORM_BLOCK:
+      return VK_FORMAT_R8G8B8A8_UNORM;
+   case VK_FORMAT_BC7_SRGB_BLOCK:
+      return VK_FORMAT_R8G8B8A8_SRGB;
+   default:
+      return VK_FORMAT_UNDEFINED;
+   }
+}
+
 bool
 radv_is_format_emulated(const struct radv_physical_device *pdev, VkFormat format)
 {
@@ -280,6 +304,9 @@ radv_is_format_emulated(const struct radv_physical_device *pdev, VkFormat format
       return true;
 
    if (pdev->emulate_astc && vk_texcompress_astc_emulation_format(format) != VK_FORMAT_UNDEFINED)
+      return true;
+
+   if (radv_bc_emulation_format(pdev, format) != VK_FORMAT_UNDEFINED)
       return true;
 
    return false;
@@ -301,7 +328,7 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
    }
 
    if ((desc->layout == UTIL_FORMAT_LAYOUT_ETC && !pdev->info.has_etc_support) ||
-       desc->layout == UTIL_FORMAT_LAYOUT_ASTC) {
+       desc->layout == UTIL_FORMAT_LAYOUT_ASTC || radv_bc_emulation_format(pdev, format) != VK_FORMAT_UNDEFINED) {
       if (radv_is_format_emulated(pdev, format)) {
          /* required features for compressed formats */
          tiled = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
@@ -311,6 +338,8 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
          VkFormat emulation_format = vk_texcompress_etc2_emulation_format(format);
          if (emulation_format == VK_FORMAT_UNDEFINED)
             emulation_format = vk_texcompress_astc_emulation_format(format);
+         if (emulation_format == VK_FORMAT_UNDEFINED)
+            emulation_format = radv_bc_emulation_format(pdev, format);
 
          if (radv_is_filter_minmax_format_supported(pdev, emulation_format))
             tiled |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
