@@ -9,10 +9,16 @@ if dep_libdrm.found()
   files_vulkan_wsi += files('wsi_common_drm.c')
 endif
 
+wsi_link_deps = []
+
 if with_platform_x11
   files_vulkan_wsi += files('wsi_common_x11.c')
   links_vulkan_wsi += libloader_x11
   links_vulkan_wsi += libloader
+  if with_platform_android
+    # Android + X11 means Termux, where MIT-SHM's shmget() lives in libandroid-shmem.
+    wsi_link_deps += cc.find_library('android-shmem', required : false)
+  endif
 endif
 
 if with_platform_wayland
@@ -80,7 +86,7 @@ idep_vulkan_wsi_headers = declare_dependency(
 if get_option('backend').startswith('vs')
   idep_vulkan_wsi = declare_dependency(
     link_with : libvulkan_wsi,
-    dependencies : idep_vulkan_wsi_headers
+    dependencies : [idep_vulkan_wsi_headers, wsi_link_deps]
   )
 else
   idep_vulkan_wsi = declare_dependency(
@@ -88,7 +94,7 @@ else
     # our weak function overloads may not resolve properly.
     link_whole : libvulkan_wsi,
     dependencies : [
-      idep_vulkan_wsi_headers, dep_libudev
+      idep_vulkan_wsi_headers, dep_libudev, wsi_link_deps
     ]
   )
 endif
