@@ -1076,8 +1076,8 @@ void ac_get_scratch_tmpring_size(const struct radeon_info *info, unsigned num_sc
    assert((bytes_per_wave & BITFIELD_MASK(info->scratch_wavesize_granularity_shift)) == 0 &&
           "scratch size per wave should be aligned");
 
-   if (info->gfx_level >= GFX11)
-      num_scratch_waves /= info->max_se; /* WAVES is per SE */
+   if (info->gfx_level >= GFX11 && !info->is_xclipse)
+      num_scratch_waves /= info->max_se; /* WAVES is per SE, except on Xclipse */
 
    *tmpring_size = S_0286E8_WAVES(num_scratch_waves) |
                    S_0286E8_WAVESIZE(bytes_per_wave >> info->scratch_wavesize_granularity_shift);

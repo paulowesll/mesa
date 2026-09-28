@@ -227,6 +227,18 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    info->compiler_info.has_attr_ring_wait_bug = false;
    info->compiler_info.has_ngg_passthru_no_msg = false;
 
+   /* Fields that ac_query_gpu_info derives for amdgpu devices. */
+   info->max_scratch_waves = MAX2(32 * info->max_good_cu_per_sa * info->max_sa_per_se * info->num_se, 32);
+   info->has_scratch_base_registers = true;
+   info->se_tile_repeat = 32 * info->max_se;
+   info->instr_prefetch_distance = 3;
+
+   /* TMPRING follows GFX10: WAVESIZE in 1 KiB units and WAVES for the whole device, not per SE.
+    * With the GFX11 encoding, waves were placed 4x further apart than the scratch buffer allows.
+    */
+   info->scratch_wavesize_granularity_shift = 10;
+   info->scratch_wavesize_granularity = BITFIELD_BIT(info->scratch_wavesize_granularity_shift);
+
    /* The kernel rejects jobs with more than one IB per submission. */
    for (unsigned ip_type = 0; ip_type < AMD_NUM_IP_TYPES; ip_type++)
       info->max_submitted_ibs[ip_type] = info->ip[ip_type].num_queues ? 1 : 0;

@@ -140,6 +140,8 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
       program->dev.has_gl1_sa_scope_glc = true;
       /* Memory returns out of order unless MEM_ORDERED is set, and GPU hangs followed. */
       program->dev.needs_mem_ordered = true;
+      /* Scratch is sized in 1 KiB units, as on GFX10 (see radeon_info). */
+      program->dev.scratch_alloc_granule = 1024;
    }
 
    if (program->gfx_level >= GFX12) {
