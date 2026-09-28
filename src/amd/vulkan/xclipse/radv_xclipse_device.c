@@ -26,6 +26,7 @@
 #include "util/macros.h"
 #include "util/u_math.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
+#include "winsys/sgpu/radv_sgpu_winsys_public.h"
 #include "ac_gpu_info.h"
 #include "radv_radeon_winsys.h"
 #include "vk_drm_syncobj.h"
@@ -64,40 +65,6 @@ radv_xclipse_load_api(void *lib, struct radv_xclipse_api *api)
    LOAD(get_marketing_name, "amdgpu_get_marketing_name");
 #undef LOAD
    return true;
-}
-
-/* RADV_SGPU_VENDOR_LIB, then a copy next to this driver (driver packages ship one), then the
- * system copy.
- */
-static void *
-radv_xclipse_open_vendor_library(void)
-{
-   char sibling[4096] = "";
-   Dl_info dl;
-
-   if (dladdr((void *)radv_xclipse_open_vendor_library, &dl) && dl.dli_fname) {
-      const char *slash = strrchr(dl.dli_fname, '/');
-      if (slash && (size_t)(slash - dl.dli_fname) + sizeof("/libdrm_sgpu.so") <= sizeof(sibling)) {
-         memcpy(sibling, dl.dli_fname, slash - dl.dli_fname);
-         strcpy(sibling + (slash - dl.dli_fname), "/libdrm_sgpu.so");
-      }
-   }
-
-   const char *paths[] = {
-      getenv("RADV_SGPU_VENDOR_LIB"),
-      sibling,
-      "/vendor/lib64/libdrm_sgpu.so",
-      "libdrm_sgpu.so",
-   };
-
-   for (unsigned i = 0; i < ARRAY_SIZE(paths); i++) {
-      if (!paths[i] || !paths[i][0])
-         continue;
-      void *lib = dlopen(paths[i], RTLD_NOW | RTLD_LOCAL);
-      if (lib)
-         return lib;
-   }
-   return NULL;
 }
 
 static void
@@ -160,7 +127,7 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
 
    memset(out, 0, sizeof(*out));
 
-   void *lib = radv_xclipse_open_vendor_library();
+   void *lib = radv_sgpu_open_vendor_library();
    if (!lib || !radv_xclipse_load_api(lib, &api)) {
       fprintf(stderr, "radv/xclipse: could not load libdrm_sgpu.so.\n");
       if (lib)
@@ -259,6 +226,9 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    info->has_set_sh_pairs = false;
    info->has_set_sh_pairs_packed = false;
    info->has_set_uconfig_pairs = false;
+
+   /* The vendor kernel honours AMDGPU_GEM_CREATE_VM_ALWAYS_VALID (its own driver uses it). */
+   info->has_vm_always_valid = true;
 
    /* Not provided by the vendor kernel driver. */
    info->has_sparse = false;

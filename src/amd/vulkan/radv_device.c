@@ -34,6 +34,9 @@
 #include "vk_util.h"
 #ifndef _WIN32
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
+#if RADV_XCLIPSE
+#include "winsys/sgpu/radv_sgpu_winsys_public.h"
+#endif
 #endif
 #include "util/mesa-blake3.h"
 #include "util/u_atomic.h"
@@ -1345,7 +1348,8 @@ radv_create_winsys(struct radv_device *device)
    int fd = -1;
    int r;
 
-   if (pdev->drm_device_type == RADV_DRM_DEVICE_AMDGPU || pdev->drm_device_type == RADV_DRM_DEVICE_VIRTIO) {
+   if (pdev->drm_device_type == RADV_DRM_DEVICE_AMDGPU || pdev->drm_device_type == RADV_DRM_DEVICE_VIRTIO ||
+       pdev->drm_device_type == RADV_DRM_DEVICE_SGPU) {
       r = drmGetDeviceFromDevId(pdev->render_devid, 0, &drm_device);
       if (r)
          return VK_ERROR_INITIALIZATION_FAILED;
@@ -1361,8 +1365,13 @@ radv_create_winsys(struct radv_device *device)
    const bool is_virtio =
       pdev->drm_device_type == RADV_DRM_DEVICE_AMDGPU_VPIPE || pdev->drm_device_type == RADV_DRM_DEVICE_VIRTIO;
 
-   result = radv_amdgpu_winsys_create(fd, &pdev->info, instance->debug_flags, instance->perftest_flags, is_virtio,
-                                      &device->ws);
+#if RADV_XCLIPSE
+   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU)
+      result = radv_sgpu_winsys_create(fd, &pdev->info, &device->ws);
+   else
+#endif
+      result = radv_amdgpu_winsys_create(fd, &pdev->info, instance->debug_flags, instance->perftest_flags, is_virtio,
+                                         &device->ws);
 
    if (fd != -1)
       close(fd);
@@ -1451,10 +1460,6 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    struct radv_instance *instance = radv_physical_device_instance(pdev);
    VkResult result;
    struct radv_device *device;
-
-   /* TODO(xclipse): removed once the SGPU winsys lands; enumeration already works. */
-   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU)
-      return vk_errorf(pdev, VK_ERROR_INITIALIZATION_FAILED, "the Xclipse SGPU winsys is not available yet");
 
    bool overallocation_disallowed = false;
 

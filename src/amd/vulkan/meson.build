@@ -280,6 +280,11 @@ if get_option('radv-xclipse')
     error('radv-xclipse needs the DRM (Linux/Android) winsys')
   endif
   libradv_files += files(
+    'winsys/sgpu/radv_sgpu_bo.c',
+    'winsys/sgpu/radv_sgpu_cs.c',
+    'winsys/sgpu/radv_sgpu_winsys.c',
+    'winsys/sgpu/radv_sgpu_winsys.h',
+    'winsys/sgpu/radv_sgpu_winsys_public.h',
     'xclipse/radv_xclipse.h',
     'xclipse/radv_xclipse_device.c',
   )
