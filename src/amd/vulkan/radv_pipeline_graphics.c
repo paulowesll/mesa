@@ -10,6 +10,7 @@
 
 #include "meta/radv_meta.h"
 #include "nir/nir.h"
+#include "nir/nir_builder.h"
 #include "nir/nir_serialize.h"
 #include "nir/nir_xfb_info.h"
 #include "nir/radv_nir.h"
@@ -2689,6 +2690,21 @@ radv_graphics_shaders_compile(const struct radv_compiler_info *compiler_info, st
       }
 
       NIR_PASS(_, stages[i].nir, nir_remove_outputs, MESA_SHADER_FRAGMENT, remove_as_varying, remove_as_sysval);
+
+      /* Xclipse needs the misc vector (pos1) exported, as the vendor driver always does: without
+       * it, primitive binning hangs the GPU.  Export a point size of 1.0 where no value of the
+       * application survives: for non-point primitives, or when the shader writes none.
+       */
+      if (compiler_info->ac->is_xclipse && i != MESA_SHADER_MESH && i != MESA_SHADER_GEOMETRY &&
+          (num_raster_vertices_per_prim > 1 || !(stages[i].nir->info.outputs_written & VARYING_BIT_PSIZ))) {
+         nir_function_impl *impl = nir_shader_get_entrypoint(stages[i].nir);
+         nir_builder b = nir_builder_at(nir_after_impl(impl));
+         nir_io_semantics io_sem = {.location = VARYING_SLOT_PSIZ, .num_slots = 1, .no_varying = true};
+
+         nir_store_output(&b, nir_imm_float(&b, 1.0f), nir_imm_int(&b, 0), .component = 0,
+                          .src_type = nir_type_float32, .io_semantics = io_sem);
+         stages[i].nir->info.outputs_written |= VARYING_BIT_PSIZ;
+      }
       break;
    }
 
