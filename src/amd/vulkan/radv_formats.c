@@ -316,6 +316,14 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
             tiled |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_MINMAX_BIT;
       }
 
+      /* Native LDR ASTC: the sampling features the vendor driver exposes. */
+      if (radv_native_astc(pdev) && desc->layout == UTIL_FORMAT_LAYOUT_ASTC &&
+          vk_texcompress_astc_emulation_format(format) != VK_FORMAT_UNDEFINED) {
+         tiled = VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+                 VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT |
+                 VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;
+      }
+
       if (radv_is_copy_image_indirect_format_supported(pdev, format)) {
          tiled |= VK_FORMAT_FEATURE_2_COPY_IMAGE_INDIRECT_DST_BIT_KHR;
          linear |= VK_FORMAT_FEATURE_2_COPY_IMAGE_INDIRECT_DST_BIT_KHR;

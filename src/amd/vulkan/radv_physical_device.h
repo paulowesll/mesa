@@ -242,6 +242,13 @@ radv_has_shader_buffer_float_minmax(const struct radv_physical_device *pdev, uns
           pdev->info.gfx_level == GFX10_3 || (pdev->info.gfx_level >= GFX11 && bitsize == 32);
 }
 
+/* Xclipse samples ASTC in hardware (see ac_descriptors.c). */
+static inline bool
+radv_native_astc(const struct radv_physical_device *pdev)
+{
+   return pdev->info.is_xclipse && !pdev->emulate_astc;
+}
+
 static inline bool
 radv_has_pops(const struct radv_physical_device *pdev)
 {

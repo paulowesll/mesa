@@ -482,12 +482,55 @@ ac_build_gfx6_texture_descriptor(const struct radeon_info *info, const struct ac
    }
 }
 
+/* Xclipse samples ASTC natively, with encodings outside the GFX11 format table: in Vulkan block
+ * size order (4x4 to 12x12), UNORM from 133, HDR from 147 and SRGB from 161, as the vendor driver's
+ * image descriptors show.  Returns 0 for other formats.
+ */
 static uint32_t
-ac_get_gfx10_img_format(const enum amd_gfx_level gfx_level, const struct ac_texture_state *state)
+ac_xclipse_astc_img_format(enum pipe_format format)
 {
+   static const enum pipe_format unorm[] = {
+      PIPE_FORMAT_ASTC_4x4,   PIPE_FORMAT_ASTC_5x4,   PIPE_FORMAT_ASTC_5x5,   PIPE_FORMAT_ASTC_6x5,
+      PIPE_FORMAT_ASTC_6x6,   PIPE_FORMAT_ASTC_8x5,   PIPE_FORMAT_ASTC_8x6,   PIPE_FORMAT_ASTC_8x8,
+      PIPE_FORMAT_ASTC_10x5,  PIPE_FORMAT_ASTC_10x6,  PIPE_FORMAT_ASTC_10x8,  PIPE_FORMAT_ASTC_10x10,
+      PIPE_FORMAT_ASTC_12x10, PIPE_FORMAT_ASTC_12x12,
+   };
+   static const enum pipe_format hdr[] = {
+      PIPE_FORMAT_ASTC_4x4_FLOAT,   PIPE_FORMAT_ASTC_5x4_FLOAT,   PIPE_FORMAT_ASTC_5x5_FLOAT,
+      PIPE_FORMAT_ASTC_6x5_FLOAT,   PIPE_FORMAT_ASTC_6x6_FLOAT,   PIPE_FORMAT_ASTC_8x5_FLOAT,
+      PIPE_FORMAT_ASTC_8x6_FLOAT,   PIPE_FORMAT_ASTC_8x8_FLOAT,   PIPE_FORMAT_ASTC_10x5_FLOAT,
+      PIPE_FORMAT_ASTC_10x6_FLOAT,  PIPE_FORMAT_ASTC_10x8_FLOAT,  PIPE_FORMAT_ASTC_10x10_FLOAT,
+      PIPE_FORMAT_ASTC_12x10_FLOAT, PIPE_FORMAT_ASTC_12x12_FLOAT,
+   };
+   static const enum pipe_format srgb[] = {
+      PIPE_FORMAT_ASTC_4x4_SRGB,   PIPE_FORMAT_ASTC_5x4_SRGB,   PIPE_FORMAT_ASTC_5x5_SRGB,
+      PIPE_FORMAT_ASTC_6x5_SRGB,   PIPE_FORMAT_ASTC_6x6_SRGB,   PIPE_FORMAT_ASTC_8x5_SRGB,
+      PIPE_FORMAT_ASTC_8x6_SRGB,   PIPE_FORMAT_ASTC_8x8_SRGB,   PIPE_FORMAT_ASTC_10x5_SRGB,
+      PIPE_FORMAT_ASTC_10x6_SRGB,  PIPE_FORMAT_ASTC_10x8_SRGB,  PIPE_FORMAT_ASTC_10x10_SRGB,
+      PIPE_FORMAT_ASTC_12x10_SRGB, PIPE_FORMAT_ASTC_12x12_SRGB,
+   };
+
+   for (unsigned i = 0; i < ARRAY_SIZE(unorm); i++) {
+      if (format == unorm[i])
+         return 133 + i;
+      if (format == hdr[i])
+         return 147 + i;
+      if (format == srgb[i])
+         return 161 + i;
+   }
+   return 0;
+}
+
+static uint32_t
+ac_get_gfx10_img_format(const struct radeon_info *info, const struct ac_texture_state *state)
+{
+   const enum amd_gfx_level gfx_level = info->gfx_level;
    const struct gfx10_format *fmt = &ac_get_gfx10_format_table(gfx_level)[state->format];
    const struct util_format_description *desc = util_format_description(state->format);
    uint32_t img_format = fmt->img_format;
+
+   if (info->is_xclipse && desc->layout == UTIL_FORMAT_LAYOUT_ASTC)
+      return ac_xclipse_astc_img_format(state->format);
 
    if (desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS &&
        state->gfx10.upgraded_depth && !util_format_has_stencil(desc)) {
@@ -508,7 +551,7 @@ ac_build_gfx10_texture_descriptor(const struct radeon_info *info, const struct a
 {
    const struct radeon_surf *surf = state->surf;
    const struct util_format_description *fmt_desc = util_format_description(state->format);
-   const uint32_t img_format = ac_get_gfx10_img_format(info->gfx_level, state);
+   const uint32_t img_format = ac_get_gfx10_img_format(info, state);
    const struct ac_surf_nbc_view *nbc_view = state->gfx10.nbc_view;
    uint32_t num_samples;
 
@@ -572,7 +615,7 @@ ac_build_gfx12_texture_descriptor(const struct radeon_info *info, const struct a
 {
    const struct radeon_surf *surf = state->surf;
    const struct util_format_description *fmt_desc = util_format_description(state->format);
-   const uint32_t img_format = ac_get_gfx10_img_format(info->gfx_level, state);
+   const uint32_t img_format = ac_get_gfx10_img_format(info, state);
    const uint32_t field_last_level = state->num_samples > 1 ? util_logbase2(state->num_samples) : state->last_level;
    const bool no_edge_clamp = state->num_levels > 1 && util_format_is_compressed(state->img_format) &&
                               !util_format_is_compressed(state->format);

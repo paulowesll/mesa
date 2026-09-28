@@ -1061,7 +1061,7 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       .multiViewport = true,
       .samplerAnisotropy = true,
       .textureCompressionETC2 = pdev->info.has_etc_support || pdev->emulate_etc2,
-      .textureCompressionASTC_LDR = pdev->emulate_astc,
+      .textureCompressionASTC_LDR = pdev->emulate_astc || radv_native_astc(pdev),
       .textureCompressionBC = true,
       .occlusionQueryPrecise = true,
       .pipelineStatisticsQuery = true,
@@ -2827,7 +2827,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
 #if DETECT_OS_ANDROID
    pdev->emulate_etc2 = !pdev->info.has_etc_support;
-   pdev->emulate_astc = true;
+   /* Xclipse samples ASTC natively. */
+   pdev->emulate_astc = !pdev->info.is_xclipse;
 #else
    pdev->emulate_etc2 = !pdev->info.has_etc_support && pdev->drirc.features.require_etc2;
    pdev->emulate_astc = pdev->drirc.features.require_astc;
