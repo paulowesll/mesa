@@ -20,12 +20,18 @@
 
 struct ac_pm4_state;
 struct radeon_winsys_info;
+struct vk_device_extension_table;
+struct vk_features;
 
 /* PCI-style vendor ID reported for the device. */
 #define RADV_XCLIPSE_VENDOR_ID 0x144d
 
 /* Queries the device through the vendor library; submits no work. */
 VkResult radv_xclipse_query_info(int fd, struct radeon_winsys_info *info);
+
+/* Hide what does not work on Xclipse and its vendor driver does not expose either. */
+void radv_xclipse_fixup_extensions(struct vk_device_extension_table *ext);
+void radv_xclipse_fixup_features(struct vk_features *features);
 
 /* Adds the register state a graphics preamble starts with. */
 void radv_xclipse_add_native_state(struct ac_pm4_state *pm4);

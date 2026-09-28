@@ -245,7 +245,8 @@ radv_has_shader_buffer_float_minmax(const struct radv_physical_device *pdev, uns
 static inline bool
 radv_has_pops(const struct radv_physical_device *pdev)
 {
-   return pdev->info.gfx_level >= GFX9 && !pdev->use_llvm;
+   /* Fragment shader interlock does not order anything on Xclipse. */
+   return pdev->info.gfx_level >= GFX9 && !pdev->use_llvm && !pdev->info.is_xclipse;
 }
 
 static inline bool

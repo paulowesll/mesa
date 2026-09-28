@@ -273,6 +273,12 @@ radv_enable_rt(const struct radv_physical_device *pdev)
    if (pdev->use_llvm)
       return false;
 
+   /* On Xclipse, a BLAS build breaks the next dispatch and a TLAS build hangs the GPU, also with
+    * emulated traversal. The vendor driver exposes no ray tracing.
+    */
+   if (pdev->info.is_xclipse)
+      return false;
+
    return true;
 }
 
@@ -1014,6 +1020,11 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
          pdev->video_encode_enabled && pdev->info.video_caps.enc[AC_VIDEO_CODEC_AVC].efc,
    };
    *out_ext = ext;
+
+#if RADV_XCLIPSE
+   if (pdev->info.is_xclipse)
+      radv_xclipse_fixup_extensions(out_ext);
+#endif
 }
 
 static void
@@ -1717,6 +1728,11 @@ radv_physical_device_get_features(const struct radv_physical_device *pdev, struc
       /* VK_KHR_extended_flags */
       .extendedFlags = true,
    };
+
+#if RADV_XCLIPSE
+   if (pdev->info.is_xclipse)
+      radv_xclipse_fixup_features(features);
+#endif
 }
 
 static size_t
@@ -1803,7 +1819,8 @@ radv_init_image_properties(struct radv_physical_device *pdev)
 static void
 radv_get_physical_device_properties(struct radv_physical_device *pdev)
 {
-   VkSampleCountFlags sample_counts = 0xf;
+   /* Xclipse has no 8x MSAA, like its vendor driver. */
+   VkSampleCountFlags sample_counts = pdev->info.is_xclipse ? 0x7 : 0xf;
 
    size_t max_descriptor_set_size = radv_max_descriptor_set_size();
 
@@ -2187,7 +2204,8 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
 
       /* VK_EXT_sample_locations */
       .sampleLocationSampleCounts = (pdev->info.gfx_level >= GFX10 ? VK_SAMPLE_COUNT_1_BIT : 0) |
-                                    VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT,
+                                    VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT |
+                                    (pdev->info.is_xclipse ? 0 : VK_SAMPLE_COUNT_8_BIT),
       .maxSampleLocationGridSize = (VkExtent2D){2, 2},
       .sampleLocationCoordinateRange = {0.0f, 0.9375f},
       .sampleLocationSubPixelBits = 4,
@@ -3538,7 +3556,8 @@ radv_GetPhysicalDeviceMultisamplePropertiesEXT(VkPhysicalDevice physicalDevice, 
    VK_FROM_HANDLE(radv_physical_device, pdev, physicalDevice);
 
    /* Note: update nir_shader_compiler_options.max_samples when changing this. */
-   VkSampleCountFlagBits supported_samples = VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT;
+   VkSampleCountFlagBits supported_samples =
+      VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | (pdev->info.is_xclipse ? 0 : VK_SAMPLE_COUNT_8_BIT);
    if (pdev->info.gfx_level >= GFX10)
       supported_samples |= VK_SAMPLE_COUNT_1_BIT;
 

@@ -30,6 +30,8 @@
 #include "ac_gpu_info.h"
 #include "radv_radeon_winsys.h"
 #include "vk_drm_syncobj.h"
+#include "vk_extensions.h"
+#include "vk_physical_device_features.h"
 
 /* Topology of Xclipse 960 (fixed; the vendor query does not describe it completely). */
 #define XCLIPSE_NUM_SE              2u
@@ -275,4 +277,34 @@ finish:
       api.device_deinitialize(device);
    dlclose(lib);
    return result;
+}
+
+void
+radv_xclipse_fixup_extensions(struct vk_device_extension_table *ext)
+{
+   /* Generated commands never run. */
+   ext->EXT_device_generated_commands = false;
+
+   /* The vendor kernel driver has no format modifiers. */
+   ext->EXT_image_drm_format_modifier = false;
+}
+
+void
+radv_xclipse_fixup_features(struct vk_features *features)
+{
+   /* fp64 arithmetic is wrong by orders of magnitude. */
+   features->shaderFloat64 = false;
+   features->shaderFmaFloat64 = false;
+   features->shaderBufferFloat64Atomics = false;
+   features->shaderBufferFloat64AtomicAdd = false;
+   features->shaderBufferFloat64AtomicMinMax = false;
+   features->shaderSharedFloat64Atomics = false;
+   features->shaderSharedFloat64AtomicAdd = false;
+   features->shaderSharedFloat64AtomicMinMax = false;
+
+   features->deviceGeneratedCommands = false;
+   features->dynamicGeneratedPipelineLayout = false;
+
+   /* No ray tracing (radv_enable_rt). */
+   features->rayQuery = false;
 }
