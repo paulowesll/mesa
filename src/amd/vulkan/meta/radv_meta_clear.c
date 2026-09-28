@@ -1584,6 +1584,55 @@ radv_subpass_clear_attachment(struct radv_cmd_buffer *cmd_buffer, const VkClearA
    radv_describe_end_render_pass_clear(cmd_buffer);
 }
 
+/* Xclipse: a colour loadOp CLEAR drawn as a fullscreen rectangle inside a pass with several
+ * render targets hangs the GPU when the following draws overlap it.  The vendor driver never clears
+ * with draws, so whole-level attachments are cleared with a compute store instead (which also
+ * rounds the clear value like the vendor driver).
+ */
+static bool
+radv_xclipse_cs_clear_attachment(struct radv_cmd_buffer *cmd_buffer, const struct radv_image_view *iview,
+                                 const VkClearColorValue *color, enum ac_barrier_flags *post_flush)
+{
+   struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   const struct radv_rendering_state *render = &cmd_buffer->state.render;
+   struct radv_image *image = iview->image;
+   const VkFormat format = iview->vk.format;
+   const unsigned level = iview->vk.base_mip_level;
+
+   if (!pdev->info.is_xclipse)
+      return false;
+
+   if (render->view_mask || image->vk.image_type != VK_IMAGE_TYPE_2D || image->vk.samples > 1 ||
+       vk_format_is_srgb(format) || vk_format_get_plane_count(format) > 1 || radv_is_format_emulated(pdev, format) ||
+       !radv_is_storage_image_format_supported(pdev, format) || radv_image_has_dcc(image))
+      return false;
+
+   /* The compute clear covers the whole level, so the render area must too. */
+   if (render->area.offset.x || render->area.offset.y ||
+       render->area.extent.width < u_minify(image->vk.extent.width, level) ||
+       render->area.extent.height < u_minify(image->vk.extent.height, level))
+      return false;
+
+   /* Earlier CB writes must land, and leave the CB cache, before the stores. */
+   cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_AND_INV_CB | AC_BARRIER_SYNC_PS | AC_BARRIER_SYNC_CS;
+
+   for (uint32_t s = 0; s < render->layer_count; s++) {
+      struct radv_meta_blit2d_surf surf = {
+         .format = format,
+         .image = image,
+         .level = level,
+         .layer = iview->vk.base_array_layer + s,
+         .aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+         .disable_compression = true,
+      };
+      radv_meta_clear_image_cs(cmd_buffer, &surf, color);
+   }
+
+   *post_flush |= AC_BARRIER_SYNC_CS | AC_BARRIER_INV_VMEM;
+   return true;
+}
+
 /**
  * Emit any pending attachment clears for the current subpass.
  *
@@ -1609,6 +1658,10 @@ radv_cmd_buffer_clear_rendering(struct radv_cmd_buffer *cmd_buffer, const VkRend
    for (uint32_t i = 0; i < render->color_att_count; i++) {
       if (render->color_att[i].iview == NULL ||
           pRenderingInfo->pColorAttachments[i].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR)
+         continue;
+
+      if (radv_xclipse_cs_clear_attachment(cmd_buffer, render->color_att[i].iview,
+                                           &pRenderingInfo->pColorAttachments[i].clearValue.color, &post_flush))
          continue;
 
       VkClearAttachment clear_att = {
