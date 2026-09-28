@@ -214,6 +214,10 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    ac_fill_feature_info(info, &dev);
    ac_fill_bug_info(info);
    ac_fill_tess_info(info);
+   /* With distributed tessellation, only the last wave of each HS workgroup produced output.
+    * The vendor driver runs it undistributed.
+    */
+   info->has_distributed_tess = false;
    ac_fill_compiler_info(info, &dev, false);
    info->compiler_info.is_xclipse = true;
    /* Parameters are exported GFX10.3-style: there is no attribute ring, whose registers do not
