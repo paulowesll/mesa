@@ -3078,13 +3078,22 @@ radv_emit_shader_prefetch(struct radv_cmd_buffer *cmd_buffer, struct radv_shader
    radv_cs_cp_dma_prefetch(device, cs, va, shader->code_size, cmd_buffer->state.cond_render.enabled);
 }
 
-ALWAYS_INLINE static void
+ALWAYS_INLINE /* Xclipse: no CP DMA prefetches of shaders and vertex descriptors into L2; the vendor driver never
+ * emits them, and with draws overlapping they stalled the CP.
+ */
+static bool
+radv_skip_cp_dma_prefetch(const struct radv_cmd_buffer *cmd_buffer)
+{
+   return radv_device_physical(radv_cmd_buffer_device(cmd_buffer))->info.is_xclipse;
+}
+
+static void
 radv_emit_graphics_prefetch(struct radv_cmd_buffer *cmd_buffer, bool first_stage_only)
 {
    struct radv_cmd_state *state = &cmd_buffer->state;
    uint32_t mask = state->prefetch_L2_mask & RADV_PREFETCH_GRAPHICS;
 
-   if (!mask)
+   if (!mask || radv_skip_cp_dma_prefetch(cmd_buffer))
       return;
 
    /* Fast prefetch path for starting draws as soon as possible. */
@@ -3122,7 +3131,7 @@ radv_emit_compute_prefetch(struct radv_cmd_buffer *cmd_buffer)
    struct radv_cmd_state *state = &cmd_buffer->state;
    uint32_t mask = state->prefetch_L2_mask & RADV_PREFETCH_CS;
 
-   if (!mask)
+   if (!mask || radv_skip_cp_dma_prefetch(cmd_buffer))
       return;
 
    radv_emit_shader_prefetch(cmd_buffer, cmd_buffer->state.shaders[MESA_SHADER_COMPUTE]);

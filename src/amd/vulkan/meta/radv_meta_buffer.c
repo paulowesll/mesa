@@ -235,6 +235,13 @@ radv_prefer_compute_or_cp_dma(const struct radv_device *device, uint64_t size, V
                               VkAddressCopyFlagsKHR dst_copy_flags)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   /* Xclipse fills and copies buffers with compute, as its vendor driver does: it never issues CP
+    * DMA, and CP DMA transfers overlapping draws were in every frame of a late game hang.
+    */
+   if (pdev->info.is_xclipse)
+      return true;
+
    bool use_compute = size >= RADV_BUFFER_OPS_CS_THRESHOLD;
 
    if (pdev->info.gfx_level >= GFX10 && pdev->info.has_dedicated_vram) {
