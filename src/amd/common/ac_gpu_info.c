@@ -599,7 +599,8 @@ ac_fill_memory_info(struct radeon_info *info, const struct drm_amdgpu_info_devic
 
    /* Firmware wrongly reports 0 bytes of MALL being present on Navi33.
     * Work around this by manually computing cache sizes. */
-   if (info->gfx_level >= GFX11 && info->family != CHIP_NAVI33) {
+   if (info->gfx_level >= GFX11 && info->family != CHIP_NAVI33 &&
+       !info->is_xclipse /* its kernel driver reports no cache sizes */) {
       info->tcp_cache_size = device_info->tcp_cache_size * 1024;
       info->l1_cache_size = device_info->gl1c_cache_size * 1024;
       info->l2_cache_size = device_info->gl2c_cache_size * 1024;

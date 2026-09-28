@@ -18,10 +18,12 @@
 #include "spirv/nir_spirv.h"
 #include "tools/radv_debug_hang.h"
 #include "tools/radv_debug_nir.h"
+#include "util/cache_ops.h"
 #include "util/memstream.h"
 #include "util/mesa-blake3.h"
 #include "util/streaming-load-memcpy.h"
 #include "util/u_atomic.h"
+#include "ac_mgfx4_regs.h"
 #include "ac_shader_util.h"
 #include "radv_cs.h"
 #include "radv_entrypoints.h"
@@ -1632,19 +1634,25 @@ radv_destroy_shader_upload_queue(struct radv_device *device)
 }
 
 static bool
-radv_should_use_wgp_mode(enum amd_gfx_level gfx_level, mesa_shader_stage stage, const struct radv_shader_info *info)
+radv_should_use_wgp_mode(const struct ac_compiler_info *ac_info, mesa_shader_stage stage,
+                         const struct radv_shader_info *info)
 {
+   const enum amd_gfx_level gfx_level = ac_info->gfx_level;
+
    if (gfx_level < GFX10)
       return false;
 
    /* Disable the WGP mode on gfx10.3 because it can hang. (it
     * happened on VanGogh) Let's disable it on all chips that
     * disable exactly 1 CU per SA for GS.
+    *
+    * Xclipse enables every CU, and runs NGG in WGP mode like its vendor driver, but compute
+    * in CU mode.
     */
-   if (gfx_level > GFX10 && info->is_ngg)
+   if (gfx_level > GFX10 && info->is_ngg && !ac_info->is_xclipse)
       return false;
 
-   if (stage == MESA_SHADER_FRAGMENT)
+   if (stage == MESA_SHADER_FRAGMENT || (ac_info->is_xclipse && stage == MESA_SHADER_COMPUTE))
       return false;
 
    /* VS+TCS programs might have an unknown LDS size if the input patch size is dynamic. */
@@ -1948,15 +1956,18 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, struct radv_shader 
 
    regs->ngg.ge_max_output_per_subgroup = S_0287FC_MAX_VERTS_PER_SUBGROUP(info->ngg_info.max_out_verts);
 
-   regs->ngg.ge_ngg_subgrp_cntl =
-      S_028B4C_PRIM_AMP_FACTOR(info->ngg_info.prim_amp_factor) | S_028B4C_THDS_PER_SUBGRP(0); /* for fast launch */
+   /* 0 means fast launch; Xclipse programs 256 threads like its vendor driver. */
+   regs->ngg.ge_ngg_subgrp_cntl = S_028B4C_PRIM_AMP_FACTOR(info->ngg_info.prim_amp_factor) |
+                                  S_028B4C_THDS_PER_SUBGRP(pdev->info.is_xclipse ? 256 : 0);
 
    regs->vgt_gs_instance_cnt = S_028B90_CNT(gs_num_invocations) | S_028B90_ENABLE(gs_num_invocations > 1) |
                                S_028B90_EN_MAX_VERT_OUT_PER_GS_INSTANCE(info->ngg_info.max_vert_out_per_gs_instance);
 
    if (pdev->info.gfx_level >= GFX11) {
-      /* This should be <= 252 for performance on Gfx11. 256 works too but is slower. */
-      const uint32_t max_prim_grp_size = pdev->info.gfx_level >= GFX12 ? 256 : 252;
+      /* This should be <= 252 for performance on Gfx11. 256 works too but is slower.
+       * Xclipse leaves it 0, like its vendor driver.
+       */
+      const uint32_t max_prim_grp_size = pdev->info.is_xclipse ? 0 : pdev->info.gfx_level >= GFX12 ? 256 : 252;
 
       regs->ngg.ge_cntl = S_03096C_PRIMS_PER_SUBGRP(info->ngg_info.max_gsprims) |
                           S_03096C_VERTS_PER_SUBGRP(info->ngg_info.hw_max_esverts) |
@@ -2124,6 +2135,14 @@ radv_precompute_registers_pgm(const struct radv_device *device, struct radv_shad
    switch (hw_stage) {
    case AC_HW_NEXT_GEN_GEOMETRY_SHADER:
       assert(gfx_level >= GFX10);
+      if (pdev->info.is_xclipse) {
+         regs->pgm_lo = R_00B218_MGFX4_SPI_SHADER_PGM_LO_ES;
+         regs->pgm_rsrc1 = R_00B210_MGFX4_SPI_SHADER_PGM_RSRC1_GS;
+         regs->pgm_rsrc2 = R_00B214_MGFX4_SPI_SHADER_PGM_RSRC2_GS;
+         regs->pgm_rsrc4 = R_00B22C_MGFX4_SPI_SHADER_PGM_RSRC4_GS;
+         break;
+      }
+
       if (gfx_level >= GFX12) {
          regs->pgm_lo = R_00B224_SPI_SHADER_PGM_LO_ES;
       } else {
@@ -2165,6 +2184,14 @@ radv_precompute_registers_pgm(const struct radv_device *device, struct radv_shad
       regs->pgm_rsrc2 = R_00B52C_SPI_SHADER_PGM_RSRC2_LS;
       break;
    case AC_HW_HULL_SHADER:
+      if (pdev->info.is_xclipse) {
+         regs->pgm_lo = R_00B418_MGFX4_SPI_SHADER_PGM_LO_HS;
+         regs->pgm_rsrc1 = R_00B410_MGFX4_SPI_SHADER_PGM_RSRC1_HS;
+         regs->pgm_rsrc2 = R_00B414_MGFX4_SPI_SHADER_PGM_RSRC2_HS;
+         regs->pgm_rsrc4 = R_00B42C_MGFX4_SPI_SHADER_PGM_RSRC4_HS;
+         break;
+      }
+
       if (gfx_level >= GFX12) {
          regs->pgm_lo = R_00B424_SPI_SHADER_PGM_LO_LS;
       } else if (gfx_level >= GFX10) {
@@ -2361,6 +2388,10 @@ radv_postprocess_binary_config(const struct radv_compiler_info *compiler_info, s
 
    config->rsrc1 = S_00B848_VGPRS((num_vgprs - 1) / (info->wave_size == 32 ? 8 : 4)) | S_00B848_DX10_CLAMP(dx10_clamp) |
                    S_00B848_FLOAT_MODE(config->float_mode);
+
+   /* The vendor driver sets the SGPRS field that GFX10+ otherwise leaves 0. */
+   if (compiler_info->ac->is_xclipse)
+      config->rsrc1 |= S_00B228_SGPRS(1);
 
    if (gfx_level >= GFX10) {
       config->rsrc2 |= S_00B22C_USER_SGPR_MSB_GFX10(args->num_user_sgprs >> 5);
@@ -2586,6 +2617,10 @@ radv_postprocess_binary_config(const struct radv_compiler_info *compiler_info, s
          }
       }
 
+      /* The vendor driver always loads VGPR1 for NGG on Xclipse. */
+      if (compiler_info->ac->is_xclipse)
+         gs_vgpr_comp_cnt = MAX2(gs_vgpr_comp_cnt, 1);
+
       config->rsrc1 |= S_00B228_GS_VGPR_COMP_CNT(gs_vgpr_comp_cnt) | S_00B228_WGP_MODE(config->wgp_mode);
       config->rsrc2 |= S_00B22C_ES_VGPR_COMP_CNT(es_vgpr_comp_cnt) | S_00B22C_LDS_SIZE(lds_alloc) |
                        S_00B22C_OC_LDS_EN(es_stage == MESA_SHADER_TESS_EVAL);
@@ -2808,6 +2843,12 @@ radv_shader_binary_upload(struct radv_device *device, const struct radv_shader_b
       struct radv_shader_binary_layout layout = radv_shader_binary_get_layout(bin);
 
       memcpy(dest_ptr, layout.code, bin->code_size);
+
+      /* Xclipse fetches shader code without snooping the CPU caches: write the new code back
+       * before any submission can reference it.
+       */
+      if (radv_device_physical(device)->info.is_xclipse)
+         util_flush_range(dest_ptr, bin->code_size);
 
       if (shader->code) {
          memcpy(shader->code, layout.code, bin->code_size);
@@ -3521,7 +3562,7 @@ radv_shader_nir_to_asm(const struct radv_compiler_info *compiler_info, struct ra
    struct radv_shader_info *info = &pl_stage->info;
    const struct radv_shader_args *args = &pl_stage->args;
 
-   bool wgp_mode = radv_should_use_wgp_mode(compiler_info->ac->gfx_level, stage, info);
+   bool wgp_mode = radv_should_use_wgp_mode(compiler_info->ac, stage, info);
    bool dump_shader = false;
    for (unsigned i = 0; i < shader_count; ++i)
       dump_shader |= radv_can_dump_shader(compiler_info, shaders[i]);
@@ -3617,7 +3658,7 @@ radv_create_trap_handler_shader(struct radv_device *device)
    radv_aco_convert_shader_info(&ac_info, &stage.info, &stage.args, &device->compiler_info);
 
    struct aco_compiler_options ac_opts;
-   bool wgp_mode = radv_should_use_wgp_mode(pdev->info.gfx_level, MESA_SHADER_COMPUTE, &stage.info);
+   bool wgp_mode = radv_should_use_wgp_mode(&pdev->info.compiler_info, MESA_SHADER_COMPUTE, &stage.info);
    radv_aco_fill_compiler_options(&ac_opts, &device->compiler_info, &stage_key, NULL, wgp_mode, dump_shader);
 
    aco_compile_trap_handler(&ac_opts, &ac_info, &stage.args.ac, &radv_aco_build_shader_binary, (void **)&binary);

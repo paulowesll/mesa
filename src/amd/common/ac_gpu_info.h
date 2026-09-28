@@ -229,8 +229,10 @@ struct ac_compiler_info {
    /* GFX6-GFX12, except GFX9: SMEM loads on NULL PRT page don't work. */
    uint32_t has_smem_with_null_prt_bug : 1;
    uint32_t has_desc_resource_level : 1;
+   /* Samsung Xclipse (MGFX4): the GFX11 ISA with some GFX10.3 behaviours, see radeon_info. */
+   uint32_t is_xclipse : 1;
 
-   uint32_t reserved : 2;
+   uint32_t reserved : 1;
 };
 
 struct radeon_info {

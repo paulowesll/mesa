@@ -63,9 +63,12 @@ gfx10_init_compute_preamble_state(const struct ac_preamble_state *state,
 
    ac_pm4_set_reg(pm4, R_00B834_COMPUTE_PGM_HI, S_00B834_DATA(info->address32_hi >> 8));
 
+   /* Xclipse enables every thread of each SE, like its vendor driver and like RADV programs
+    * before each dispatch (a resumed IB replays this preamble with register shadowing).
+    */
    for (unsigned i = 0; i < 2; ++i)
       ac_pm4_set_reg(pm4, R_00B858_COMPUTE_STATIC_THREAD_MGMT_SE0 + i * 4,
-                     i < info->max_se ? compute_cu_en : 0x0);
+                     i < info->max_se ? (info->is_xclipse ? 0xffffffff : compute_cu_en) : 0x0);
 
    for (unsigned i = 2; i < 4; ++i)
       ac_pm4_set_reg(pm4, R_00B864_COMPUTE_STATIC_THREAD_MGMT_SE2 + (i - 2) * 4,
@@ -480,9 +483,14 @@ gfx10_init_graphics_preamble_state(const struct ac_preamble_state *state,
    ac_pm4_set_reg(pm4, R_00B324_SPI_SHADER_PGM_HI_ES,
                   S_00B324_MEM_BASE(info->address32_hi >> 8));
 
-   ac_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS,
-                  ac_apply_cu_en(S_00B41C_CU_EN(0xffff) | S_00B41C_WAVE_LIMIT(0x3F),
-                                 C_00B41C_CU_EN, 0, info));
+   /* On Xclipse (MGFX4) this offset is SPI_SHADER_PGM_HI_HS; its HS RSRC3 is written with each
+    * HS program instead.
+    */
+   if (!info->is_xclipse) {
+      ac_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS,
+                     ac_apply_cu_en(S_00B41C_CU_EN(0xffff) | S_00B41C_WAVE_LIMIT(0x3F),
+                                    C_00B41C_CU_EN, 0, info));
+   }
    ac_pm4_set_reg(pm4, R_00B4C8_SPI_SHADER_USER_ACCUM_LSHS_0, 0);
    ac_pm4_set_reg(pm4, R_00B4CC_SPI_SHADER_USER_ACCUM_LSHS_1, 0);
    ac_pm4_set_reg(pm4, R_00B4D0_SPI_SHADER_USER_ACCUM_LSHS_2, 0);

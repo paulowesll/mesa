@@ -37,6 +37,7 @@
 
 #include "ac_cmdbuf_video.h"
 #include "ac_debug.h"
+#include "ac_mgfx4_regs.h"
 #include "ac_descriptors.h"
 #include "ac_guardband.h"
 #include "ac_nir.h"
@@ -3382,6 +3383,22 @@ radv_emit_hw_ls(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *sh
    radeon_end();
 }
 
+/* Xclipse (MGFX4) writes each RSRC3/RSRC4 CU-enable pair with its vendor packet, which applies
+ * the CU mask; with SET_SH_REG the waves of the stage run on part of the CUs only.
+ */
+#define radv_xclipse_emit_cu_pair(rsrc3_reg, rsrc3, rsrc4)                                         \
+   do {                                                                                            \
+      radeon_emit(MGFX4_CU_PAIR_HEADER);                                                           \
+      radeon_emit(MGFX4_CU_PAIR_REG(rsrc3_reg));                                                   \
+      radeon_emit(rsrc3);                                                                          \
+      radeon_emit((rsrc4) | MGFX4_CU_PAIR_RSRC4_BIT);                                              \
+   } while (0)
+
+/* HS: every CU, no wave limit. */
+#define radv_xclipse_emit_hs_cu_pair(rsrc4)                                                        \
+   radv_xclipse_emit_cu_pair(R_00B428_MGFX4_SPI_SHADER_PGM_RSRC3_HS, S_00B41C_CU_EN(0xffff),      \
+                             ((rsrc4) & C_00B404_CU_EN) | S_00B404_CU_EN(0xff))
+
 static void
 radv_emit_hw_ngg(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *es, const struct radv_shader *shader)
 {
@@ -3409,6 +3426,14 @@ radv_emit_hw_ngg(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *e
          gfx12_push_sh_reg(shader->regs.pgm_rsrc1, shader->config.rsrc1);
          gfx12_push_sh_reg(shader->regs.pgm_rsrc2, shader->config.rsrc2);
          gfx12_push_sh_reg(shader->regs.pgm_rsrc4, shader->regs.spi_shader_pgm_rsrc4_gs_hs);
+      } else if (pdev->info.is_xclipse) {
+         radeon_set_sh_reg_seq(shader->regs.pgm_lo, 2);
+         radeon_emit(va >> 8);
+         radeon_emit(S_00B214_MEM_BASE(va >> 40));
+         radeon_set_sh_reg_seq(shader->regs.pgm_rsrc1, 2);
+         radeon_emit(shader->config.rsrc1);
+         radeon_emit(shader->config.rsrc2);
+         radeon_set_sh_reg(shader->regs.pgm_rsrc4, shader->regs.spi_shader_pgm_rsrc4_gs_hs);
       } else {
          radeon_set_sh_reg(shader->regs.pgm_lo, va >> 8);
          radeon_set_sh_reg_seq(shader->regs.pgm_rsrc1, 2);
@@ -3520,7 +3545,11 @@ radv_emit_hw_ngg(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *e
       gfx12_push_sh_reg(ngg_lds_layout_offset,
                         SET_SGPR_FIELD(NGG_LDS_LAYOUT_GS_OUT_VERTEX_BASE, shader->info.ngg_info.esgs_ring_size));
    } else {
-      radeon_set_sh_reg(R_00B21C_SPI_SHADER_PGM_RSRC3_GS, shader->regs.spi_shader_pgm_rsrc3_gs);
+      if (pdev->info.is_xclipse)
+         radv_xclipse_emit_cu_pair(R_00B228_MGFX4_SPI_SHADER_PGM_RSRC3_GS, S_00B21C_CU_EN(0xffff),
+                                   shader->regs.spi_shader_pgm_rsrc4_gs_hs);
+      else
+         radeon_set_sh_reg(R_00B21C_SPI_SHADER_PGM_RSRC3_GS, shader->regs.spi_shader_pgm_rsrc3_gs);
 
       if (pdev->info.gfx_level < GFX11)
          radeon_set_sh_reg(R_00B204_SPI_SHADER_PGM_RSRC4_GS, shader->regs.spi_shader_pgm_rsrc4_gs_hs);
@@ -3547,6 +3576,12 @@ radv_emit_hw_hs(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *sh
       gfx12_push_sh_reg(shader->regs.pgm_lo, va >> 8);
       gfx12_push_sh_reg(shader->regs.pgm_rsrc1, shader->config.rsrc1);
       gfx12_push_sh_reg(shader->regs.pgm_rsrc4, shader->regs.spi_shader_pgm_rsrc4_gs_hs);
+   } else if (pdev->info.is_xclipse) {
+      radeon_set_sh_reg_seq(shader->regs.pgm_lo, 2);
+      radeon_emit(va >> 8);
+      radeon_emit(S_00B524_MEM_BASE(va >> 40));
+      radeon_set_sh_reg(shader->regs.pgm_rsrc1, shader->config.rsrc1);
+      radv_xclipse_emit_hs_cu_pair(shader->regs.spi_shader_pgm_rsrc4_gs_hs);
    } else {
       if (pdev->info.gfx_level >= GFX9) {
          radeon_set_sh_reg(shader->regs.pgm_lo, va >> 8);
@@ -3613,7 +3648,9 @@ radv_emit_vertex_shader(struct radv_cmd_buffer *cmd_buffer)
                radeon_emit(rsrc1);
                radeon_emit(rsrc2);
             }
-            if (pdev->info.gfx_level >= GFX11)
+            if (pdev->info.is_xclipse && vs->info.next_stage == MESA_SHADER_TESS_CTRL)
+               radv_xclipse_emit_hs_cu_pair(rsrc4);
+            else if (pdev->info.gfx_level >= GFX11)
                radeon_set_sh_reg(vs->regs.pgm_rsrc4, rsrc4);
          }
       }
@@ -4081,7 +4118,10 @@ radv_emit_fragment_shader(struct radv_cmd_buffer *cmd_buffer)
       radeon_emit(ps->config.rsrc1);
       radeon_emit(ps->config.rsrc2);
 
-      if (pdev->info.gfx_level >= GFX11)
+      if (pdev->info.is_xclipse)
+         radv_xclipse_emit_cu_pair(R_00B000_MGFX4_SPI_SHADER_PGM_RSRC3_PS, 0x0040ffff,
+                                   (ps->regs.ps.spi_shader_pgm_rsrc4_ps & C_00B004_CU_EN) | S_00B004_CU_EN(0xffff));
+      else if (pdev->info.gfx_level >= GFX11)
          radeon_set_sh_reg(R_00B004_SPI_SHADER_PGM_RSRC4_PS, ps->regs.ps.spi_shader_pgm_rsrc4_ps);
    }
    radeon_end();
@@ -6524,7 +6564,10 @@ emit_prolog_regs(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *v
          } else {
             rsrc4 = (rsrc4 & C_00B404_INST_PREF_SIZE) | S_00B404_INST_PREF_SIZE(prolog->inst_pref_size);
          }
-         radeon_set_sh_reg(vs_shader->regs.pgm_rsrc4, rsrc4);
+         if (pdev->info.is_xclipse && !prolog->key.vs.is_ngg)
+            radv_xclipse_emit_hs_cu_pair(rsrc4);
+         else
+            radeon_set_sh_reg(vs_shader->regs.pgm_rsrc4, rsrc4);
       }
    }
    radeon_end();

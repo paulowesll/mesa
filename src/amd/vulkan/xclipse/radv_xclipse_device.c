@@ -215,6 +215,13 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    ac_fill_bug_info(info);
    ac_fill_tess_info(info);
    ac_fill_compiler_info(info, &dev, false);
+   info->compiler_info.is_xclipse = true;
+   /* Parameters are exported GFX10.3-style: there is no attribute ring, whose registers do not
+    * exist on MGFX4.  NGG passthrough without the GS allocation message is not supported either.
+    */
+   info->compiler_info.has_attr_ring = false;
+   info->compiler_info.has_attr_ring_wait_bug = false;
+   info->compiler_info.has_ngg_passthru_no_msg = false;
 
    /* The kernel rejects jobs with more than one IB per submission. */
    for (unsigned ip_type = 0; ip_type < AMD_NUM_IP_TYPES; ip_type++)

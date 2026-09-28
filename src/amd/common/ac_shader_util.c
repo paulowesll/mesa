@@ -806,6 +806,10 @@ void ac_compute_late_alloc(const struct radeon_info *info, bool ngg, bool ngg_cu
    if (ngg && info->family == CHIP_NAVI14)
       return;
 
+   /* Xclipse runs without late alloc like its vendor driver, so no CU is masked either. */
+   if (info->is_xclipse)
+      return;
+
    if (info->gfx_level >= GFX10) {
       /* For Wave32, the hw will launch twice the number of late alloc waves, so 1 == 2x wave32.
        * These limits are estimated because they are all safe but they vary in performance.
