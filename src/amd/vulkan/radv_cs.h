@@ -47,6 +47,10 @@ radeon_check_space(struct radeon_winsys *ws, struct ac_cmdbuf *cs, unsigned need
 /* Packet building helpers for CONTEXT registers. */
 #define radeon_set_context_reg_seq(reg, num) ac_cmdbuf_set_ctx_reg_seq(reg, num)
 
+#define radeon_set_context_reg_array(reg, num, values) ac_cmdbuf_set_ctx_reg_array(reg, num, values)
+
+#define radeon_set_mgfx4_context_reg_seq(reg, num) ac_cmdbuf_set_mgfx4_ctx_reg_seq(reg, num)
+
 #define radeon_set_context_reg(reg, value) ac_cmdbuf_set_ctx_reg(reg, value)
 
 #define radeon_set_context_reg_idx(reg, idx, value) ac_cmdbuf_set_ctx_reg_idx(reg, idx, value)

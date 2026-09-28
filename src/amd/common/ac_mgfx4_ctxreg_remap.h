@@ -18,7 +18,11 @@
 #ifndef AC_MGFX4_CTXREG_REMAP_H
 #define AC_MGFX4_CTXREG_REMAP_H
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
+
+#include "sid.h"
 
 #define AC_MGFX4_CTX_REMAP_SIZE 960
 #define AC_MGFX4_CTX_NO_MAP     0xffff
@@ -992,6 +996,41 @@ ac_mgfx4_remap_ctx_offset(unsigned dw_offset)
    if (dw_offset < AC_MGFX4_CTX_REMAP_SIZE && ac_mgfx4_ctx_remap[dw_offset] != AC_MGFX4_CTX_NO_MAP)
       return ac_mgfx4_ctx_remap[dw_offset];
    return dw_offset;
+}
+
+/* Whether count consecutive GFX11 context registers stay consecutive on MGFX4. */
+static inline bool
+ac_mgfx4_ctx_range_is_contiguous(unsigned dw_offset, unsigned count)
+{
+   const unsigned first = ac_mgfx4_remap_ctx_offset(dw_offset);
+
+   for (unsigned i = 1; i < count; i++) {
+      if (ac_mgfx4_remap_ctx_offset(dw_offset + i) != first + i)
+         return false;
+   }
+   return true;
+}
+
+/* Writes count consecutive GFX11 context registers at buf[num] with one SET_CONTEXT_REG packet
+ * per run that stays consecutive on MGFX4.  Returns the new dword count.
+ */
+static inline unsigned
+ac_mgfx4_emit_ctx_regs(uint32_t *buf, unsigned num, unsigned dw_offset, unsigned count, const uint32_t *values)
+{
+   for (unsigned i = 0; i < count;) {
+      const unsigned first = ac_mgfx4_remap_ctx_offset(dw_offset + i);
+      unsigned run = 1;
+
+      while (i + run < count && ac_mgfx4_remap_ctx_offset(dw_offset + i + run) == first + run)
+         run++;
+
+      buf[num++] = PKT3(PKT3_SET_CONTEXT_REG, run, 0);
+      buf[num++] = first;
+      memcpy(buf + num, values + i, run * 4);
+      num += run;
+      i += run;
+   }
+   return num;
 }
 
 #endif /* AC_MGFX4_CTXREG_REMAP_H */

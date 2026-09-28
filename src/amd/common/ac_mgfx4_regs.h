@@ -30,6 +30,11 @@
 /* PS: RSRC3 sits next to RSRC4 (0xB004, as on GFX11). */
 #define R_00B000_MGFX4_SPI_SHADER_PGM_RSRC3_PS 0x00B000
 
+/* Viewports use the GFX12 layout from here: XSCALE, XOFFSET, YSCALE, YOFFSET, ZSCALE, ZOFFSET,
+ * ZMIN and ZMAX for each viewport.
+ */
+#define R_028444_MGFX4_PA_CL_VPORT_XSCALE      0x028444
+
 /* The vendor writes each RSRC3/RSRC4 CU-enable pair with packet 0x3E and register index 3, which
  * applies the CU mask; with plain SET_SH_REG the waves of that stage run on part of the CUs only.
  * RSRC4 carries bit 31 in that form.

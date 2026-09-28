@@ -354,8 +354,38 @@ struct ac_tracked_regs {
        ? SI_CONTEXT_REG_OFFSET + (ac_mgfx4_remap_ctx_offset(((reg) - SI_CONTEXT_REG_OFFSET) >> 2) << 2) \
        : (unsigned)(reg))
 
+/* On Xclipse, a sequence must stay consecutive after the remap; use ac_cmdbuf_set_ctx_reg_array
+ * for ranges that don't.
+ */
 #define ac_cmdbuf_set_ctx_reg_seq(reg, num)                                                        \
-   __ac_cmdbuf_set_reg_seq(__ac_cmdbuf_ctx_reg(reg), num, 0, SI_CONTEXT, PKT3_SET_CONTEXT_REG, 0)
+   do {                                                                                           \
+      assert(!__cs->remap_ctx_regs ||                                                             \
+             ac_mgfx4_ctx_range_is_contiguous(((reg) - SI_CONTEXT_REG_OFFSET) >> 2, num));        \
+      __ac_cmdbuf_set_reg_seq(__ac_cmdbuf_ctx_reg(reg), num, 0, SI_CONTEXT, PKT3_SET_CONTEXT_REG, 0); \
+   } while (0)
+
+/* Sets num consecutive context registers from values.  Xclipse places some of them apart, so
+ * each run that stays consecutive gets its own packet there (2 extra dwords per split).
+ */
+#define ac_cmdbuf_set_ctx_reg_array(reg, num, values)                                              \
+   do {                                                                                           \
+      const unsigned __reg = (reg);                                                               \
+      const unsigned __count = (num);                                                             \
+      if (__cs->remap_ctx_regs) {                                                                 \
+         __cs_num = ac_mgfx4_emit_ctx_regs(__cs_buf, __cs_num, (__reg - SI_CONTEXT_REG_OFFSET) >> 2, \
+                                           __count, (values));                                    \
+      } else {                                                                                    \
+         __ac_cmdbuf_set_reg_seq(__reg, __count, 0, SI_CONTEXT, PKT3_SET_CONTEXT_REG, 0);          \
+         ac_cmdbuf_emit_array((values), __count);                                                 \
+      }                                                                                           \
+   } while (0)
+
+/* Xclipse: a sequence at an MGFX4 context register offset, which is not remapped. */
+#define ac_cmdbuf_set_mgfx4_ctx_reg_seq(reg, num)                                                  \
+   do {                                                                                           \
+      assert(__cs->remap_ctx_regs);                                                               \
+      __ac_cmdbuf_set_reg_seq(reg, num, 0, SI_CONTEXT, PKT3_SET_CONTEXT_REG, 0);                  \
+   } while (0)
 
 #define ac_cmdbuf_set_ctx_reg(reg, value)                                                          \
    __ac_cmdbuf_set_reg(__ac_cmdbuf_ctx_reg(reg), 0, value, SI_CONTEXT, PKT3_SET_CONTEXT_REG)
@@ -520,9 +550,8 @@ struct ac_tracked_regs {
       const uint32_t __v2 = (v2);                                                                           \
       if (!BITSET_TEST_RANGE_INSIDE_WORD(tracked_regs->reg_saved_mask, (reg_enum), (reg_enum) + 1, 0x3) ||  \
           tracked_regs->reg_value[(reg_enum)] != __v1 || tracked_regs->reg_value[(reg_enum) + 1] != __v2) { \
-         ac_cmdbuf_set_ctx_reg_seq(reg, 2);                                                                 \
-         ac_cmdbuf_emit(__v1);                                                                              \
-         ac_cmdbuf_emit(__v2);                                                                              \
+         const uint32_t __values[] = {__v1, __v2};                                                          \
+         ac_cmdbuf_set_ctx_reg_array(reg, 2, __values);                                                     \
          BITSET_SET_RANGE_INSIDE_WORD(tracked_regs->reg_saved_mask, (reg_enum), (reg_enum) + 1);            \
          tracked_regs->reg_value[(reg_enum)] = __v1;                                                        \
          tracked_regs->reg_value[(reg_enum) + 1] = __v2;                                                    \
@@ -540,10 +569,8 @@ struct ac_tracked_regs {
       if (!BITSET_TEST_RANGE_INSIDE_WORD(tracked_regs->reg_saved_mask, (reg_enum), (reg_enum) + 2, 0x7) ||  \
           tracked_regs->reg_value[(reg_enum)] != __v1 || tracked_regs->reg_value[(reg_enum) + 1] != __v2 || \
           tracked_regs->reg_value[(reg_enum) + 2] != __v3) {                                                \
-         ac_cmdbuf_set_ctx_reg_seq(reg, 3);                                                                 \
-         ac_cmdbuf_emit(__v1);                                                                              \
-         ac_cmdbuf_emit(__v2);                                                                              \
-         ac_cmdbuf_emit(__v3);                                                                              \
+         const uint32_t __values[] = {__v1, __v2, __v3};                                                    \
+         ac_cmdbuf_set_ctx_reg_array(reg, 3, __values);                                                     \
          BITSET_SET_RANGE_INSIDE_WORD(__tracked_regs->reg_saved_mask, (reg_enum), (reg_enum) + 2);          \
          tracked_regs->reg_value[(reg_enum)] = __v1;                                                        \
          tracked_regs->reg_value[(reg_enum) + 1] = __v2;                                                    \
@@ -563,11 +590,8 @@ struct ac_tracked_regs {
       if (!BITSET_TEST_RANGE_INSIDE_WORD(tracked_regs->reg_saved_mask, (reg_enum), (reg_enum) + 3, 0xf) ||        \
           tracked_regs->reg_value[(reg_enum)] != __v1 || tracked_regs->reg_value[(reg_enum) + 1] != __v2 ||       \
           tracked_regs->reg_value[(reg_enum) + 2] != __v3 || tracked_regs->reg_value[(reg_enum) + 3] != __v4) {   \
-         ac_cmdbuf_set_ctx_reg_seq(reg, 4);                                                                       \
-         ac_cmdbuf_emit(__v1);                                                                                    \
-         ac_cmdbuf_emit(__v2);                                                                                    \
-         ac_cmdbuf_emit(__v3);                                                                                    \
-         ac_cmdbuf_emit(__v4);                                                                                    \
+         const uint32_t __values[] = {__v1, __v2, __v3, __v4};                                                   \
+         ac_cmdbuf_set_ctx_reg_array(reg, 4, __values);                                                           \
          BITSET_SET_RANGE_INSIDE_WORD(tracked_regs->reg_saved_mask, (reg_enum), (reg_enum) + 3);                  \
          tracked_regs->reg_value[(reg_enum)] = __v1;                                                              \
          tracked_regs->reg_value[(reg_enum) + 1] = __v2;                                                          \
@@ -580,8 +604,7 @@ struct ac_tracked_regs {
 #define ac_cmdbuf_opt_set_ctx_regn(reg, values, saved_values, num)      \
    do {                                                                 \
       if (memcmp(values, saved_values, sizeof(uint32_t) * (num))) {     \
-         ac_cmdbuf_set_ctx_reg_seq(reg, num);                           \
-         ac_cmdbuf_emit_array(values, num);                             \
+         ac_cmdbuf_set_ctx_reg_array(reg, num, values);                 \
          memcpy(saved_values, values, sizeof(uint32_t) * (num));        \
          __cs->context_roll = true;                                     \
       }                                                                 \
