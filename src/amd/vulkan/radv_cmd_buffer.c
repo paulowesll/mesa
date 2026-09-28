@@ -3162,9 +3162,19 @@ radv_emit_rbplus_state(struct radv_cmd_buffer *cmd_buffer)
 
    for (unsigned i = 0; i < render->color_att_count; i++) {
       const struct radv_color_buffer_info *cb = &render->color_att[i].cb;
+      enum amd_gfx_level cb_gfx_level = pdev->info.gfx_level;
+      uint32_t cb_color_attrib = cb->ac.cb_color_attrib;
 
-      ac_set_sx_downconvert_state_for_mrt(pdev->info.gfx_level, render->color_att[i].iview == NULL,
-                                          cb->ac.cb_color_info, cb->ac.cb_color_attrib,
+      /* Xclipse's CB_COLOR_INFO has the GFX10.3 layout, and its ATTRIB keeps FORCE_DST_ALPHA_1
+       * elsewhere.
+       */
+      if (pdev->info.is_xclipse) {
+         cb_gfx_level = GFX10_3;
+         cb_color_attrib = S_028C74_FORCE_DST_ALPHA_1_GFX6(G_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(cb_color_attrib));
+      }
+
+      ac_set_sx_downconvert_state_for_mrt(cb_gfx_level, render->color_att[i].iview == NULL,
+                                          cb->ac.cb_color_info, cb_color_attrib,
                                           cmd_buffer->state.spi_shader_col_format, d->color_write_mask, i,
                                           &sx_ps_downconvert, &sx_blend_opt_epsilon, &sx_blend_opt_control, NULL);
    }
@@ -6769,10 +6779,11 @@ lookup_ps_epilog(struct radv_cmd_buffer *cmd_buffer)
 
       state.color_attachment_formats[i] = render->color_att[i].format;
 
-      const uint32_t blend_src1_alpha =
-         pdev->info.gfx_level >= GFX11 ? V_028780_BLEND_SRC1_ALPHA_GFX11 : V_028780_BLEND_SRC1_ALPHA_GFX6;
+      /* Xclipse encodes the blend factors like GFX10.3. */
+      const bool gfx11_blend = pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse;
+      const uint32_t blend_src1_alpha = gfx11_blend ? V_028780_BLEND_SRC1_ALPHA_GFX11 : V_028780_BLEND_SRC1_ALPHA_GFX6;
       const uint32_t blend_inv_src1_alpha =
-         pdev->info.gfx_level >= GFX11 ? V_028780_BLEND_INV_SRC1_ALPHA_GFX11 : V_028780_BLEND_INV_SRC1_ALPHA_GFX6;
+         gfx11_blend ? V_028780_BLEND_INV_SRC1_ALPHA_GFX11 : V_028780_BLEND_INV_SRC1_ALPHA_GFX6;
 
       if (src_blend == V_028780_BLEND_SRC_ALPHA || src_blend == V_028780_BLEND_ONE_MINUS_SRC_ALPHA ||
           src_blend == V_028780_BLEND_SRC_ALPHA_SATURATE || src_blend == blend_src1_alpha ||

@@ -8,6 +8,7 @@
 #include "ac_descriptors.h"
 #include "ac_gpu_info.h"
 #include "ac_formats.h"
+#include "ac_mgfx4_regs.h"
 #include "ac_surface.h"
 
 #include "gfx10_format_table.h"
@@ -1334,7 +1335,14 @@ ac_init_gfx10_cb_surface(const struct radeon_info *info, const struct ac_cb_stat
                         S_028C78_MIN_COMPRESSED_BLOCK_SIZE(ac_get_dcc_min_compressed_block_size(info)) |
                         S_028C78_INDEPENDENT_64B_BLOCKS(surf->u.gfx9.color.dcc.independent_64B_blocks);
 
-   if (info->gfx_level >= GFX11) {
+   if (info->is_xclipse) {
+      cb->cb_color_info |= S_028C70_ENDIAN(ac_colorformat_endian_swap(cb_format)) |
+                           S_028C70_FORMAT_GFX6(cb_format) |
+                           S_028C70_COMPRESSION(!!surf->fmask_offset);
+      cb->cb_color_attrib |= S_MGFX4_CB_COLOR_ATTRIB_NUM_SAMPLES(util_logbase2(state->num_samples)) |
+                             S_MGFX4_CB_COLOR_ATTRIB_NUM_FRAGMENTS(util_logbase2(state->num_storage_samples)) |
+                             S_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(force_dst_alpha_1);
+   } else if (info->gfx_level >= GFX11) {
       assert(!UTIL_ARCH_BIG_ENDIAN);
       cb->cb_color_info |= S_028C70_FORMAT_GFX11(cb_format);
       cb->cb_color_attrib |= S_028C74_NUM_FRAGMENTS_GFX11(util_logbase2(state->num_storage_samples)) |

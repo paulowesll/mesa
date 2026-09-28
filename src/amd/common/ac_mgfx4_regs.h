@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* Shader registers that Samsung Xclipse (MGFX4) placed differently from GFX11, and the vendor
+/* Registers that Samsung Xclipse (MGFX4) placed or laid out differently from GFX11, and the vendor
  * packet that writes the CU-enable pairs.  Observed in the command streams of Samsung's driver.
  */
 
@@ -29,6 +29,12 @@
 
 /* PS: RSRC3 sits next to RSRC4 (0xB004, as on GFX11). */
 #define R_00B000_MGFX4_SPI_SHADER_PGM_RSRC3_PS 0x00B000
+
+/* CB_COLOR*_INFO keeps the GFX10.3 layout; CB_COLOR*_ATTRIB is laid out differently. */
+#define S_MGFX4_CB_COLOR_ATTRIB_NUM_SAMPLES(x)       (((unsigned)(x) & 0x7) << 0)
+#define S_MGFX4_CB_COLOR_ATTRIB_NUM_FRAGMENTS(x)     (((unsigned)(x) & 0x3) << 3)
+#define S_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(x) (((unsigned)(x) & 0x1) << 5)
+#define G_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(x) (((x) >> 5) & 0x1)
 
 /* Viewports use the GFX12 layout from here: XSCALE, XOFFSET, YSCALE, YOFFSET, ZSCALE, ZOFFSET,
  * ZMIN and ZMAX for each viewport.

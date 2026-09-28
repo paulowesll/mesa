@@ -694,15 +694,18 @@ radv_translate_blend_equation(const struct radv_physical_device *pdev, VkBlendOp
                       S_028760_ALPHA_SRC_OPT(srcA_opt) | S_028760_ALPHA_DST_OPT(dstA_opt) |
                       S_028760_ALPHA_COMB_FCN(radv_translate_blend_opt_function(eqA));
 
+   /* Xclipse encodes the blend factors like GFX10.3. */
+   const enum amd_gfx_level blend_gfx_level = pdev->info.is_xclipse ? GFX10_3 : pdev->info.gfx_level;
+
    cb_blend_control |= S_028780_ENABLE(1);
    cb_blend_control |= S_028780_COLOR_COMB_FCN(radv_translate_blend_function(eqRGB));
-   cb_blend_control |= S_028780_COLOR_SRCBLEND(radv_translate_blend_factor(pdev->info.gfx_level, srcRGB));
-   cb_blend_control |= S_028780_COLOR_DESTBLEND(radv_translate_blend_factor(pdev->info.gfx_level, dstRGB));
+   cb_blend_control |= S_028780_COLOR_SRCBLEND(radv_translate_blend_factor(blend_gfx_level, srcRGB));
+   cb_blend_control |= S_028780_COLOR_DESTBLEND(radv_translate_blend_factor(blend_gfx_level, dstRGB));
    if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB) {
       cb_blend_control |= S_028780_SEPARATE_ALPHA_BLEND(1);
       cb_blend_control |= S_028780_ALPHA_COMB_FCN(radv_translate_blend_function(eqA));
-      cb_blend_control |= S_028780_ALPHA_SRCBLEND(radv_translate_blend_factor(pdev->info.gfx_level, srcA));
-      cb_blend_control |= S_028780_ALPHA_DESTBLEND(radv_translate_blend_factor(pdev->info.gfx_level, dstA));
+      cb_blend_control |= S_028780_ALPHA_SRCBLEND(radv_translate_blend_factor(blend_gfx_level, srcA));
+      cb_blend_control |= S_028780_ALPHA_DESTBLEND(radv_translate_blend_factor(blend_gfx_level, dstA));
    }
 
    *cb_blend_control_out = cb_blend_control;
