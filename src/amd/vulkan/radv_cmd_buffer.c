@@ -4996,20 +4996,26 @@ radv_gfx11_emit_fb_color_state(struct radv_cmd_buffer *cmd_buffer, int index, co
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
+   uint32_t cb_color_info = cb->ac.cb_color_info;
    uint32_t cb_fdcc_control = cb->ac.cb_dcc_control;
    struct radv_cmd_stream *cs = cmd_buffer->cs;
    struct radv_image *image = iview->image;
 
    if (!radv_layout_dcc_compressed(device, image, iview->vk.base_mip_level, layout,
                                    radv_image_queue_family_mask(image, cmd_buffer->qf))) {
+      cb_color_info &= C_028C70_DCC_ENABLE;
       cb_fdcc_control &= C_028C78_FDCC_ENABLE;
    }
+
+   /* The CB of Xclipse enables DCC in CB_COLOR_INFO, like GFX10.3. */
+   const bool dcc_enabled =
+      pdev->info.is_xclipse ? G_028C70_DCC_ENABLE(cb_color_info) : G_028C78_FDCC_ENABLE(cb_fdcc_control);
 
    radeon_begin(cs);
    if (pdev->info.has_set_context_pairs_packed) {
       gfx11_begin_packed_context_regs();
       gfx11_set_context_reg(R_028C6C_CB_COLOR0_VIEW + index * 0x3c, cb->ac.cb_color_view);
-      gfx11_set_context_reg(R_028C70_CB_COLOR0_INFO + index * 0x3c, cb->ac.cb_color_info);
+      gfx11_set_context_reg(R_028C70_CB_COLOR0_INFO + index * 0x3c, cb_color_info);
       gfx11_set_context_reg(R_028C74_CB_COLOR0_ATTRIB + index * 0x3c, cb->ac.cb_color_attrib);
       gfx11_set_context_reg(R_028C78_CB_COLOR0_DCC_CONTROL + index * 0x3c, cb_fdcc_control);
       gfx11_set_context_reg(R_028C60_CB_COLOR0_BASE + index * 0x3c, cb->ac.cb_color_base);
@@ -5022,7 +5028,7 @@ radv_gfx11_emit_fb_color_state(struct radv_cmd_buffer *cmd_buffer, int index, co
    } else {
       const uint32_t cb_color_regs[] = {
          cb->ac.cb_color_view,   /* CB_COLOR0_VIEW */
-         cb->ac.cb_color_info,   /* CB_COLOR0_INFO */
+         cb_color_info,          /* CB_COLOR0_INFO */
          cb->ac.cb_color_attrib, /* CB_COLOR0_ATTRIB */
          cb_fdcc_control,        /* CB_COLOR0_FDCC_CONTROL */
       };
@@ -5036,7 +5042,7 @@ radv_gfx11_emit_fb_color_state(struct radv_cmd_buffer *cmd_buffer, int index, co
    }
    radeon_end();
 
-   if (G_028C78_FDCC_ENABLE(cb_fdcc_control)) {
+   if (dcc_enabled) {
       /* Drawing with DCC enabled also compresses colorbuffers. */
       VkImageSubresourceRange range = vk_image_view_subresource_range(&iview->vk);
 

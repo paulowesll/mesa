@@ -442,7 +442,7 @@ radv_compute_copy_memory_to_image_indirect(struct radv_cmd_buffer *cmd_buffer,
          const uint32_t queue_mask = radv_image_queue_family_mask(dst_image, cmd_buffer->qf);
          const VkFormat raw_format = vk_format_for_size(vk_format_get_blocksize(img_bsurf.format));
 
-         if (!radv_dcc_formats_compatible(pdev->info.gfx_level, img_bsurf.format, raw_format, NULL) &&
+         if (!radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), img_bsurf.format, raw_format, NULL) &&
              radv_layout_dcc_compressed(device, dst_image, imageSubresource->mipLevel, dst_image_layout, queue_mask)) {
             radv_describe_barrier_start(cmd_buffer, RGP_BARRIER_UNKNOWN_REASON);
 

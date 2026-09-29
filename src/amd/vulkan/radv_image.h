@@ -156,8 +156,15 @@ static inline bool
 radv_image_compress_dcc_on_image_stores(const struct radv_device *device, const struct radv_image *image)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
+   const struct radeon_surf *surf = &image->planes[0].surface;
 
-   return ac_surface_supports_dcc_image_stores(pdev->info.gfx_level, &image->planes[0].surface);
+   /* Xclipse stores to its 256B-block DCC like GFX11.5, as the vendor driver does. */
+   if (pdev->info.is_xclipse && !surf->u.gfx9.color.dcc.independent_64B_blocks &&
+       surf->u.gfx9.color.dcc.independent_128B_blocks &&
+       surf->u.gfx9.color.dcc.max_compressed_block_size == V_028C78_MAX_BLOCK_SIZE_256B)
+      return true;
+
+   return ac_surface_supports_dcc_image_stores(pdev->info.gfx_level, surf);
 }
 
 /**
@@ -395,6 +402,10 @@ static inline bool
 radv_image_get_iterate256(const struct radv_device *device, struct radv_image *image)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   /* The vendor driver sets it on every DCC image of Xclipse. */
+   if (pdev->info.is_xclipse && radv_image_has_dcc(image))
+      return true;
 
    /* ITERATE_256 is required for depth or stencil MSAA images that are TC-compatible HTILE. */
    return pdev->info.gfx_level >= GFX10 && radv_image_is_tc_compat_htile(image) && image->vk.samples > 1;

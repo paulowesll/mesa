@@ -242,6 +242,15 @@ radv_has_shader_buffer_float_minmax(const struct radv_physical_device *pdev, uns
           pdev->info.gfx_level == GFX10_3 || (pdev->info.gfx_level >= GFX11 && bitsize == 32);
 }
 
+/* The DCC of Xclipse follows GFX10.3, where compressed data depends on the channel layout, so
+ * reinterpreting a DCC image follows the GFX10.3 compatibility rules.
+ */
+static inline enum amd_gfx_level
+radv_dcc_compat_gfx_level(const struct radv_physical_device *pdev)
+{
+   return pdev->info.is_xclipse ? GFX10_3 : pdev->info.gfx_level;
+}
+
 /* Xclipse samples ASTC in hardware (see ac_descriptors.c). */
 static inline bool
 radv_native_astc(const struct radv_physical_device *pdev)

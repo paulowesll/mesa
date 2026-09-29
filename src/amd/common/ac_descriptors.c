@@ -1291,7 +1291,7 @@ ac_get_dcc_min_compressed_block_size(const struct radeon_info *info)
     * 32B minimum request size. Sometimes a different size is used depending on the data fabric,
     * etc.
     */
-   return info->has_dedicated_vram || info->family == CHIP_STRIX_HALO ?
+   return info->has_dedicated_vram || info->family == CHIP_STRIX_HALO || info->is_xclipse ?
             V_028C78_MIN_BLOCK_SIZE_32B : V_028C78_MIN_BLOCK_SIZE_64B;
 }
 
@@ -1385,6 +1385,7 @@ ac_init_gfx10_cb_surface(const struct radeon_info *info, const struct ac_cb_stat
       cb->cb_color_attrib |= S_MGFX4_CB_COLOR_ATTRIB_NUM_SAMPLES(util_logbase2(state->num_samples)) |
                              S_MGFX4_CB_COLOR_ATTRIB_NUM_FRAGMENTS(util_logbase2(state->num_storage_samples)) |
                              S_MGFX4_CB_COLOR_ATTRIB_FORCE_DST_ALPHA_1(force_dst_alpha_1);
+      cb->cb_dcc_control |= S_028C78_INDEPENDENT_128B_BLOCKS_GFX10(surf->u.gfx9.color.dcc.independent_128B_blocks);
    } else if (info->gfx_level >= GFX11) {
       assert(!UTIL_ARCH_BIG_ENDIAN);
       cb->cb_color_info |= S_028C70_FORMAT_GFX11(cb_format);
@@ -1562,9 +1563,12 @@ ac_set_mutable_cb_surface_fields(const struct radeon_info *info, const struct ac
       cb->cb_color_attrib3 |= S_028EE0_COLOR_SW_MODE(surf->u.gfx9.swizzle_mode) |
                               S_028EE0_DCC_PIPE_ALIGNED(surf->u.gfx9.color.dcc.pipe_aligned);
 
+      /* The CB of Xclipse follows GFX10.3: CB_COLOR_INFO.DCC_ENABLE enables DCC, and the
+       * FDCC_ENABLE bit is DCC_COMPRESS_DISABLE there.
+       */
       if (state->dcc_enabled) {
          cb->cb_dcc_control |= S_028C78_DISABLE_CONSTANT_ENCODE_REG(1) |
-                               S_028C78_FDCC_ENABLE(1);
+                               S_028C78_FDCC_ENABLE(!info->is_xclipse);
 
          if (info->family >= CHIP_PHOENIX2) {
             cb->cb_dcc_control |= S_028C78_ENABLE_MAX_COMP_FRAG_OVERRIDE(1) |
@@ -1648,7 +1652,7 @@ ac_set_mutable_cb_surface_fields(const struct radeon_info *info, const struct ac
       cb->cb_color_fmask = cb->cb_color_base;
    }
 
-   if (info->gfx_level < GFX11)
+   if (info->gfx_level < GFX11 || info->is_xclipse)
       cb->cb_color_info |= S_028C70_DCC_ENABLE(state->dcc_enabled);
 }
 

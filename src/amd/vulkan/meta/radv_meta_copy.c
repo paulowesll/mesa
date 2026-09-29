@@ -264,7 +264,7 @@ gfx_or_compute_copy_memory_to_image(struct radv_cmd_buffer *cmd_buffer, VkAddres
       const uint32_t queue_mask = radv_image_queue_family_mask(image, cmd_buffer->qf);
       const VkFormat raw_format = vk_format_for_size(vk_format_get_blocksize(img_bsurf.format));
 
-      if (!radv_dcc_formats_compatible(pdev->info.gfx_level, img_bsurf.format, raw_format, NULL) &&
+      if (!radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), img_bsurf.format, raw_format, NULL) &&
           radv_layout_dcc_compressed(device, image, region->imageSubresource.mipLevel, region->imageLayout,
                                      queue_mask)) {
          radv_describe_barrier_start(cmd_buffer, RGP_BARRIER_UNKNOWN_REASON);
@@ -502,7 +502,7 @@ compute_copy_image_to_memory(struct radv_cmd_buffer *cmd_buffer, VkAddressCopyFl
       const uint32_t queue_mask = radv_image_queue_family_mask(image, cmd_buffer->qf);
       const VkFormat raw_format = vk_format_for_size(vk_format_get_blocksize(img_info.format));
 
-      if (!radv_dcc_formats_compatible(pdev->info.gfx_level, img_info.format, raw_format, NULL) &&
+      if (!radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), img_info.format, raw_format, NULL) &&
           radv_layout_dcc_compressed(device, image, region->imageSubresource.mipLevel, region->imageLayout,
                                      queue_mask)) {
          radv_describe_barrier_start(cmd_buffer, RGP_BARRIER_UNKNOWN_REASON);
@@ -763,7 +763,7 @@ gfx_or_compute_copy_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image 
    bool need_dcc_sign_reinterpret = false;
 
    if (!src_compressed ||
-       (radv_dcc_formats_compatible(pdev->info.gfx_level, b_src.format, b_dst.format, &need_dcc_sign_reinterpret) &&
+       (radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), b_src.format, b_dst.format, &need_dcc_sign_reinterpret) &&
         !need_dcc_sign_reinterpret)) {
       b_src.format = b_dst.format;
    } else if (!dst_compressed) {

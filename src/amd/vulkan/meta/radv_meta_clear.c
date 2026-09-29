@@ -1351,12 +1351,19 @@ radv_can_fast_clear_color(struct radv_cmd_buffer *cmd_buffer, const struct radv_
       bool can_avoid_fast_clear_elim;
       uint32_t reset_value;
 
-      if (pdev->info.gfx_level >= GFX11) {
+      if (pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse) {
          if (!gfx11_get_fast_clear_parameters(device, iview, &clear_value, &reset_value))
             return false;
       } else {
          gfx8_get_fast_clear_parameters(device, iview, &clear_value, &reset_value, &can_avoid_fast_clear_elim);
       }
+
+      /* The DCC of Xclipse follows GFX10.3.  Only the constant codes are used, which need neither
+       * a fast-clear eliminate nor a clear value.
+       */
+      if (pdev->info.is_xclipse && reset_value != GFX8_DCC_CLEAR_0000 && reset_value != GFX8_DCC_CLEAR_0001 &&
+          reset_value != GFX8_DCC_CLEAR_1110 && reset_value != GFX8_DCC_CLEAR_1111)
+         return false;
 
       if (iview->image->vk.mip_levels > 1) {
          if (pdev->info.gfx_level >= GFX9) {
@@ -1424,7 +1431,7 @@ radv_fast_clear_color(struct radv_cmd_buffer *cmd_buffer, const struct radv_imag
       uint32_t reset_value;
       bool can_avoid_fast_clear_elim = true;
 
-      if (pdev->info.gfx_level >= GFX11) {
+      if (pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse) {
          ASSERTED bool result = gfx11_get_fast_clear_parameters(device, iview, &clear_value, &reset_value);
          assert(result);
       } else {

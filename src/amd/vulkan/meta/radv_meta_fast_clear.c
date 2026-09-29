@@ -125,8 +125,10 @@ get_pipeline(struct radv_device *device, enum radv_color_op op, VkPipeline *pipe
       radv_info.custom_blend_mode = V_028808_CB_FMASK_DECOMPRESS;
       break;
    case DCC_DECOMPRESS:
+      /* The CB of Xclipse follows GFX10.3, where the GFX11 value is CB_RESOLVE. */
       radv_info.custom_blend_mode =
-         pdev->info.gfx_level >= GFX11 ? V_028808_CB_DCC_DECOMPRESS_GFX11 : V_028808_CB_DCC_DECOMPRESS_GFX8;
+         pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse ? V_028808_CB_DCC_DECOMPRESS_GFX11
+                                                                 : V_028808_CB_DCC_DECOMPRESS_GFX8;
       break;
    default:
       UNREACHABLE("Invalid color op");

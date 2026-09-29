@@ -163,8 +163,8 @@ radv_are_formats_dcc_compatible(const struct radv_physical_device *pdev, const v
    if (sign_reinterpret != NULL)
       *sign_reinterpret = false;
 
-   /* All formats are compatible on GFX11. */
-   if ((flags & VK_IMAGE_CREATE_2_MUTABLE_FORMAT_BIT_KHR) && pdev->info.gfx_level < GFX11) {
+   /* All formats are compatible on GFX11, but not on Xclipse. */
+   if ((flags & VK_IMAGE_CREATE_2_MUTABLE_FORMAT_BIT_KHR) && radv_dcc_compat_gfx_level(pdev) < GFX11) {
       const struct VkImageFormatListCreateInfo *format_list =
          (const struct VkImageFormatListCreateInfo *)vk_find_struct_const(pNext, IMAGE_FORMAT_LIST_CREATE_INFO);
 
@@ -176,7 +176,7 @@ radv_are_formats_dcc_compatible(const struct radv_physical_device *pdev, const v
             if (format_list->pViewFormats[i] == VK_FORMAT_UNDEFINED)
                continue;
 
-            if (!radv_dcc_formats_compatible(pdev->info.gfx_level, format, format_list->pViewFormats[i],
+            if (!radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), format, format_list->pViewFormats[i],
                                              sign_reinterpret))
                return false;
          }
@@ -232,6 +232,25 @@ radv_use_dcc_for_image_early(struct radv_device *device, struct radv_image *imag
 
    if (radv_is_dcc_disabled(pdev) || image->vk.compr_flags == VK_IMAGE_COMPRESSION_DISABLED_EXT) {
       return false;
+   }
+
+   if (pdev->info.is_xclipse) {
+      /* MSAA resolves of DCC images are wrong. */
+      if (pCreateInfo->samples > 1)
+         return false;
+
+      /* The vendor never compresses 8bpp targets, and blending onto a compressed R8 target loses
+       * blended blocks.
+       */
+      if (vk_format_get_blocksizebits(format) == 8)
+         return false;
+
+      /* 10:10:10:2 with DCC corrupted the backbuffer of DXVK in a UE4 replay, although its state
+       * matches the vendor and no probe reproduces it.
+       */
+      const struct util_format_description *desc = vk_format_description(format);
+      if (desc->block.bits == 32 && desc->channel[0].size == 10 && desc->channel[3].size == 2)
+         return false;
    }
 
    if (image->vk.external_handle_types && image->vk.tiling != VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)

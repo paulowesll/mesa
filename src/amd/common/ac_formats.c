@@ -751,7 +751,8 @@ ac_simplify_cb_format(enum pipe_format format)
 bool
 ac_alpha_is_on_msb(const struct radeon_info *info, enum pipe_format format)
 {
-   if (info->gfx_level >= GFX11)
+   /* The DCC of Xclipse follows GFX10.3, and its texture unit needs this bit to decode it. */
+   if (info->gfx_level >= GFX11 && !info->is_xclipse)
       return false;
 
    format = ac_simplify_cb_format(format);
