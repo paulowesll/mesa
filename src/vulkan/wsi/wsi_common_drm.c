@@ -592,7 +592,12 @@ wsi_configure_native_image(const struct wsi_swapchain *chain,
 
    info->explicit_sync = params->explicit_sync;
 
-   if (params->num_modifier_lists == 0) {
+   if (params->ahb_socket) {
+      /* gralloc lays out a buffer with CPU access linearly.  The images that fall back to plain
+       * DRI3 stay linear, which is what a peer without modifiers expects.
+       */
+      info->create.tiling = VK_IMAGE_TILING_LINEAR;
+   } else if (params->num_modifier_lists == 0) {
       /* If we don't have modifiers, fall back to the legacy "scanout" flag */
       info->wsi.scanout = true;
    } else {
@@ -910,6 +915,9 @@ bool
 wsi_drm_image_needs_buffer_blit(const struct wsi_device *wsi,
                                 const struct wsi_drm_image_params *params)
 {
+   if (params->ahb_socket)
+      return false;
+
    if (WSI_DEBUG & WSI_DEBUG_BUFFER)
       return true;
 

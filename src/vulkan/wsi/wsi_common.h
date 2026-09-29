@@ -136,6 +136,9 @@ struct wsi_device {
       /* Never report VK_SUBOPTIMAL_KHR. Used to workaround
        * games that cannot handle SUBOPTIMAL correctly. */
       bool ignore_suboptimal;
+
+      /* Present AHardwareBuffers sent over the DRI3 socket (Termux-X11) on Android. */
+      bool ahb_socket;
    } x11;
 
    struct {
@@ -241,6 +244,7 @@ struct wsi_device {
    WSI_CB(GetImageMemoryRequirements);
    WSI_CB(GetImageSubresourceLayout);
    WSI_CB(GetMemoryFdKHR);
+   WSI_CB(GetMemoryFdPropertiesKHR);
    WSI_CB(GetPhysicalDeviceCalibrateableTimeDomainsKHR);
    WSI_CB(GetPhysicalDeviceProperties);
    WSI_CB(GetPhysicalDeviceFormatProperties);

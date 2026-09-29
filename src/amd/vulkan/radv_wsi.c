@@ -107,6 +107,7 @@ radv_init_wsi(struct radv_physical_device *pdev)
     */
    pdev->wsi_device.supports_modifiers = !pdev->info.is_xclipse;
    pdev->wsi_device.supports_scanout = !pdev->info.is_xclipse;
+   pdev->wsi_device.x11.ahb_socket = pdev->info.is_xclipse;
    pdev->wsi_device.set_memory_ownership = radv_wsi_set_memory_ownership;
    pdev->wsi_device.get_blit_queue = radv_wsi_get_prime_blit_queue;
 

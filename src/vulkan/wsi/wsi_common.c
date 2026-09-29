@@ -218,8 +218,10 @@ wsi_device_init(struct wsi_device *wsi,
    WSI_GET_CB(GetImageDrmFormatModifierPropertiesEXT);
    WSI_GET_CB(GetImageMemoryRequirements);
    WSI_GET_CB(GetImageSubresourceLayout);
-   if (!wsi->sw)
+   if (!wsi->sw) {
       WSI_GET_CB(GetMemoryFdKHR);
+      WSI_GET_CB(GetMemoryFdPropertiesKHR);
+   }
    WSI_GET_CB(GetPhysicalDeviceCalibrateableTimeDomainsKHR);
    WSI_GET_CB(GetPhysicalDeviceProperties);
    WSI_GET_CB(GetPhysicalDeviceFormatProperties);

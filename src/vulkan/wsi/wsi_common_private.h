@@ -65,6 +65,8 @@ struct wsi_drm_image_params {
    struct wsi_base_image_params base;
 
    bool same_gpu;
+   /* The X11 swapchain allocates AHardwareBuffers itself. */
+   bool ahb_socket;
    /* See wsi_image_info.explicit_sync. */
    bool explicit_sync;
 

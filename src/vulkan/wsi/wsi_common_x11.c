@@ -42,7 +42,11 @@
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
+#include <dlfcn.h>
+#include <pthread.h>
+#include <sys/socket.h>
 #include "drm-uapi/drm_fourcc.h"
+#include "util/detect_os.h"
 #include "util/libdrm.h"
 #include "util/cnd_monotonic.h"
 #include "util/hash_table.h"
@@ -66,6 +70,14 @@
 #include "wsi_common_queue.h"
 #include "loader/loader_dri_helper_screen.h"
 
+#if DETECT_OS_ANDROID && defined(__ANDROID_API__) && __ANDROID_API__ >= 26
+#include <android/hardware_buffer.h>
+#include <cutils/native_handle.h>
+#define WSI_X11_HAS_AHB_SOCKET 1
+#else
+#define WSI_X11_HAS_AHB_SOCKET 0
+#endif
+
 #ifdef HAVE_SYS_SHM_H
 #include <sys/ipc.h>
 #include <sys/shm.h>
@@ -79,6 +91,92 @@
 #endif
 
 #define MAX_DAMAGE_RECTS 64
+
+#if WSI_X11_HAS_AHB_SOCKET
+/* Termux-X11 takes an AHardwareBuffer sent over the DRI3 socket when the pixmap carries this
+ * modifier; it composites such buffers directly instead of copying a dma-buf.
+ */
+#define WSI_X11_AHB_SOCKET_MODIFIER 1255
+
+/* The AHB API lives in the system libraries, which a driver loaded outside an Android app
+ * process does not link against.
+ */
+struct x11_ahb_api {
+   bool available;
+   int (*allocate)(const AHardwareBuffer_Desc *, AHardwareBuffer **);
+   void (*release)(AHardwareBuffer *);
+   void (*describe)(const AHardwareBuffer *, AHardwareBuffer_Desc *);
+   int (*send_handle_to_socket)(const AHardwareBuffer *, int);
+   const native_handle_t *(*get_native_handle)(const AHardwareBuffer *);
+};
+
+static struct x11_ahb_api x11_ahb;
+static pthread_once_t x11_ahb_once = PTHREAD_ONCE_INIT;
+
+static void
+x11_init_ahb_api(void)
+{
+   static const char *const libraries[] = {
+      "/system/lib64/libnativewindow.so",
+      "/system/lib64/libandroid.so",
+      "libnativewindow.so",
+      "libandroid.so",
+   };
+
+   for (uint32_t i = 0; i < ARRAY_SIZE(libraries); i++) {
+      void *library = dlopen(libraries[i], RTLD_NOW | RTLD_LOCAL);
+      if (!library)
+         continue;
+
+      x11_ahb.allocate = dlsym(library, "AHardwareBuffer_allocate");
+      x11_ahb.release = dlsym(library, "AHardwareBuffer_release");
+      x11_ahb.describe = dlsym(library, "AHardwareBuffer_describe");
+      x11_ahb.send_handle_to_socket = dlsym(library, "AHardwareBuffer_sendHandleToUnixSocket");
+      x11_ahb.get_native_handle = dlsym(library, "AHardwareBuffer_getNativeHandle");
+
+      if (x11_ahb.allocate && x11_ahb.release && x11_ahb.describe &&
+          x11_ahb.send_handle_to_socket && x11_ahb.get_native_handle) {
+         x11_ahb.available = true;
+         return;
+      }
+
+      dlclose(library);
+      memset(&x11_ahb, 0, sizeof(x11_ahb));
+   }
+}
+
+static bool
+x11_load_ahb_api(void)
+{
+   pthread_once(&x11_ahb_once, x11_init_ahb_api);
+   return x11_ahb.available;
+}
+
+static uint32_t
+x11_ahb_format(VkFormat format, uint32_t *bytes_per_pixel)
+{
+   switch (format) {
+   case VK_FORMAT_B8G8R8A8_UNORM:
+   case VK_FORMAT_B8G8R8A8_SRGB:
+      *bytes_per_pixel = 4;
+      return 5; /* HAL_PIXEL_FORMAT_BGRA_8888, which the NDK does not name */
+   case VK_FORMAT_R8G8B8A8_UNORM:
+   case VK_FORMAT_R8G8B8A8_SRGB:
+      *bytes_per_pixel = 4;
+      return AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+   case VK_FORMAT_R5G6B5_UNORM_PACK16:
+      *bytes_per_pixel = 2;
+      return AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM;
+   case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+   case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+      *bytes_per_pixel = 4;
+      return AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
+   default:
+      *bytes_per_pixel = 0;
+      return 0;
+   }
+}
+#endif
 
 struct wsi_x11_screen_resources {
    struct list_head link;
@@ -1222,6 +1320,7 @@ struct x11_image_pending_completion {
 
 struct x11_image {
    struct wsi_image                          base;
+   struct AHardwareBuffer *                  ahb;
    xcb_pixmap_t                              pixmap;
    xcb_xfixes_region_t                       update_region; /* long lived XID */
    xcb_xfixes_region_t                       update_area;   /* the above or None */
@@ -1262,6 +1361,15 @@ struct x11_swapchain {
    struct wsi_swapchain                        base;
 
    bool                                         has_dri3_modifiers;
+   /* Created for the AHB socket transport, whose consumer ignores implicit fences.  use_ahb_socket
+    * is cleared if the images fall back to plain DRI3.
+    */
+   bool                                         ahb_socket_requested;
+   bool                                         use_ahb_socket;
+   /* create_mem of the plain DRI3 path, the fallback when the AHB socket transport fails. */
+   VkResult (*native_create_mem)(const struct wsi_swapchain *chain,
+                                 const struct wsi_image_info *info,
+                                 struct wsi_image *image);
    bool                                         has_mit_shm;
    bool                                         has_async_may_tear;
    bool                                         msc_estimate_is_stable;
@@ -1328,6 +1436,185 @@ struct x11_swapchain {
 };
 VK_DEFINE_NONDISP_HANDLE_CASTS(x11_swapchain, base.base, VkSwapchainKHR,
                                VK_OBJECT_TYPE_SWAPCHAIN_KHR)
+
+#if WSI_X11_HAS_AHB_SOCKET
+static void
+x11_image_release_ahb(struct x11_image *image)
+{
+   if (image->ahb) {
+      x11_ahb.release(image->ahb);
+      image->ahb = NULL;
+   }
+}
+
+/* Backs the image with an AHardwareBuffer, imported through its dma-buf. */
+static VkResult
+x11_create_ahb_image_mem(const struct wsi_swapchain *wsi_chain,
+                         const struct wsi_image_info *info,
+                         struct wsi_image *wsi_image)
+{
+   const struct wsi_device *wsi = wsi_chain->wsi;
+   struct x11_image *image = container_of(wsi_image, struct x11_image, base);
+   uint32_t bytes_per_pixel;
+   const uint32_t ahb_format = x11_ahb_format(info->create.format, &bytes_per_pixel);
+   if (!ahb_format)
+      return VK_ERROR_FORMAT_NOT_SUPPORTED;
+
+   /* Termux-X11 locks the buffer for CPU access when it composites it inside a parent window
+    * (the virtual desktop of wine), and a GPU-only buffer stays black there.
+    */
+   AHardwareBuffer_Desc desc = {
+      .width = info->create.extent.width,
+      .height = info->create.extent.height,
+      .layers = info->create.arrayLayers,
+      .format = ahb_format,
+      .usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER |
+               AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
+   };
+
+   if (x11_ahb.allocate(&desc, &image->ahb) != 0 || !image->ahb)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+
+   x11_ahb.describe(image->ahb, &desc);
+   /* gralloc reports stride 0 for buffers without CPU usage, laid out with one row per width. */
+   const uint32_t stride = desc.stride ? desc.stride : desc.width;
+   if (desc.width != info->create.extent.width || desc.height != info->create.extent.height ||
+       desc.layers != info->create.arrayLayers || stride < desc.width)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   const uint64_t row_pitch = (uint64_t)stride * bytes_per_pixel;
+   const uint64_t size = row_pitch * desc.height;
+   if (size > UINT32_MAX)
+      return VK_ERROR_FORMAT_NOT_SUPPORTED;
+
+   /* The image is linear; its rows must line up with those of the buffer. */
+   const VkImageSubresource subresource = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+   };
+   VkSubresourceLayout layout;
+   wsi->GetImageSubresourceLayout(wsi_chain->device, wsi_image->image, &subresource, &layout);
+   if (layout.rowPitch != row_pitch)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   const native_handle_t *handle = x11_ahb.get_native_handle(image->ahb);
+   if (!handle || handle->numFds < 1 || handle->data[0] < 0)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   VkMemoryRequirements reqs;
+   wsi->GetImageMemoryRequirements(wsi_chain->device, wsi_image->image, &reqs);
+
+   int import_fd = os_dupfd_cloexec(handle->data[0]);
+   if (import_fd < 0)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+   VkMemoryFdPropertiesKHR fd_props = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+   };
+   VkResult result = wsi->GetMemoryFdPropertiesKHR(wsi_chain->device,
+                                                   VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                                                   import_fd, &fd_props);
+   const uint32_t memory_type_bits = reqs.memoryTypeBits & fd_props.memoryTypeBits;
+   if (result == VK_SUCCESS && !memory_type_bits)
+      result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   if (result != VK_SUCCESS) {
+      close(import_fd);
+      return result;
+   }
+
+   const struct wsi_memory_allocate_info memory_wsi_info = {
+      .sType = VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA,
+      .implicit_sync = !info->explicit_sync && !wsi_chain->dma_buf_semaphore,
+      .dma_buf_sync_file = wsi_chain->dma_buf_semaphore,
+   };
+   const VkImportMemoryFdInfoKHR import_info = {
+      .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+      .pNext = &memory_wsi_info,
+      .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+      .fd = import_fd,
+   };
+   const VkMemoryDedicatedAllocateInfo dedicated_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+      .pNext = &import_info,
+      .image = wsi_image->image,
+   };
+   /* The compatible types come from the dma-buf itself, which is not necessarily in a
+    * DEVICE_LOCAL heap, so no property flags are required.
+    */
+   const VkMemoryAllocateInfo memory_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &dedicated_info,
+      .allocationSize = reqs.size,
+      .memoryTypeIndex = ffs(memory_type_bits) - 1,
+   };
+
+   result = wsi->AllocateMemory(wsi_chain->device, &memory_info, &wsi_chain->alloc,
+                                &wsi_image->memory);
+   if (result != VK_SUCCESS) {
+      close(import_fd);
+      return result;
+   }
+
+   /* A successful import took import_fd; the image keeps its own descriptor for implicit sync. */
+   wsi_image->dma_buf_fd = os_dupfd_cloexec(handle->data[0]);
+   if (wsi_image->dma_buf_fd < 0)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+   wsi_image->drm_modifier = DRM_FORMAT_MOD_INVALID;
+   wsi_image->num_planes = 1;
+   wsi_image->sizes[0] = size;
+   wsi_image->row_pitches[0] = row_pitch;
+   wsi_image->offsets[0] = 0;
+   return VK_SUCCESS;
+}
+
+static VkResult
+x11_create_ahb_socket_pixmap(struct x11_swapchain *chain, struct x11_image *image,
+                             const VkSwapchainCreateInfoKHR *create_info)
+{
+   int socket_fds[2];
+   uint32_t bytes_per_pixel;
+
+   x11_ahb_format(create_info->imageFormat, &bytes_per_pixel);
+
+   if (socketpair(AF_UNIX, SOCK_STREAM, 0, socket_fds) != 0)
+      return VK_ERROR_INITIALIZATION_FAILED;
+
+   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+   if (x11_ahb.send_handle_to_socket(image->ahb, socket_fds[0]) == 0) {
+      /* xcb closes the descriptors it sends. */
+      int32_t buffers[4] = { socket_fds[1], -1, -1, -1 };
+      socket_fds[1] = -1;
+
+      xcb_void_cookie_t cookie =
+         xcb_dri3_pixmap_from_buffers_checked(chain->conn, image->pixmap, chain->window, 1,
+                                              create_info->imageExtent.width,
+                                              create_info->imageExtent.height,
+                                              0, 0, 0, 0, 0, 0, 0, 0,
+                                              chain->depth, bytes_per_pixel * 8,
+                                              WSI_X11_AHB_SOCKET_MODIFIER, buffers);
+      xcb_generic_error_t *error = xcb_request_check(chain->conn, cookie);
+      if (error)
+         free(error);
+      else
+         result = VK_SUCCESS;
+   }
+
+   close(socket_fds[0]);
+   if (socket_fds[1] >= 0)
+      close(socket_fds[1]);
+   return result;
+}
+
+/* Rebuilds the image through the plain DRI3 path, which the rest of the swapchain uses too. */
+static VkResult
+x11_image_fall_back_from_ahb(struct x11_swapchain *chain, struct x11_image *image)
+{
+   x11_image_release_ahb(image);
+   chain->use_ahb_socket = false;
+   chain->base.image_info.create_mem = chain->native_create_mem;
+   return wsi_create_image(&chain->base, &chain->base.image_info, &image->base);
+}
+#endif
 
 static bool x11_refresh_rate_estimate_is_stable(struct x11_swapchain *swapchain, uint64_t base_rate)
 {
@@ -2542,7 +2829,8 @@ x11_manage_present_queue(void *state)
 
       /* Not necessary to block when we have explicit sync */
       bool need_fence_wait =
-            x11_needs_wait_for_fences(chain->base.wsi, wsi_conn, present_mode) &&
+            (chain->ahb_socket_requested ||
+             x11_needs_wait_for_fences(chain->base.wsi, wsi_conn, present_mode)) &&
             !chain->base.image_info.explicit_sync;
 
       bool need_timing_fence_wait = x11_swapchain_present_timing_is_out_of_order_completion(
@@ -2643,6 +2931,11 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
 
    result = wsi_create_image(&chain->base, &chain->base.image_info,
                              &image->base);
+#if WSI_X11_HAS_AHB_SOCKET
+   /* gralloc refused this geometry, or its dma-buf could not be imported. */
+   if (result != VK_SUCCESS && chain->use_ahb_socket)
+      result = x11_image_fall_back_from_ahb(chain, image);
+#endif
    if (result != VK_SUCCESS)
       return result;
 
@@ -2677,6 +2970,19 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
       goto out_fence;
    }
    image->pixmap = xcb_generate_id(chain->conn);
+
+#if WSI_X11_HAS_AHB_SOCKET
+   if (chain->use_ahb_socket) {
+      if (x11_create_ahb_socket_pixmap(chain, image, pCreateInfo) == VK_SUCCESS)
+         goto out_fence;
+
+      /* This X server does not take AHardwareBuffer handles over the DRI3 socket. */
+      wsi_destroy_image(&chain->base, &image->base);
+      result = x11_image_fall_back_from_ahb(chain, image);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+#endif
 
    if (image->base.drm_modifier != DRM_FORMAT_MOD_INVALID) {
       /* If the image has a modifier, we must have DRI3 v1.2. */
@@ -2787,6 +3093,9 @@ fail_pixmap:
 
 fail_image:
    wsi_destroy_image(&chain->base, &image->base);
+#if WSI_X11_HAS_AHB_SOCKET
+   x11_image_release_ahb(image);
+#endif
 
 #else
    UNREACHABLE("SHM support not compiled in");
@@ -2824,6 +3133,9 @@ x11_image_finish(struct x11_swapchain *chain,
    }
 
    wsi_destroy_image(&chain->base, &image->base);
+#if WSI_X11_HAS_AHB_SOCKET
+   x11_image_release_ahb(image);
+#endif
 #ifdef HAVE_SYS_SHM_H
    if (image->shmaddr)
       shmdt(image->shmaddr);
@@ -2933,7 +3245,7 @@ wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain)
 {
    const struct wsi_device *wsi_device = chain->base.wsi;
 
-   if (wsi_device->sw || !use_modifiers(wsi_device))
+   if (wsi_device->sw || !use_modifiers(wsi_device) || chain->ahb_socket_requested)
       return false;
 
    struct wsi_drm_image_params drm_image_params;
@@ -3135,6 +3447,14 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    if (!wsi_conn)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
+   bool use_ahb_socket = false;
+#if WSI_X11_HAS_AHB_SOCKET
+   uint32_t ahb_bytes_per_pixel;
+   use_ahb_socket = !wsi_device->sw && wsi_device->x11.ahb_socket &&
+                    x11_ahb_format(pCreateInfo->imageFormat, &ahb_bytes_per_pixel) &&
+                    x11_load_ahb_api();
+#endif
+
    /* Get number of images in our swapchain. This count depends on:
     * - requested minimal image count
     * - device characteristics
@@ -3232,16 +3552,17 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       drm_image_params = (struct wsi_drm_image_params) {
          .base.image_type = WSI_IMAGE_TYPE_DRM,
          .same_gpu = wsi_x11_check_dri3_compatible(wsi_device, conn),
+         .ahb_socket = use_ahb_socket,
          .explicit_sync =
 #ifdef HAVE_DRI3_EXPLICIT_SYNC
-            wsi_conn->has_dri3_explicit_sync &&
+            !use_ahb_socket && wsi_conn->has_dri3_explicit_sync &&
             (present_caps & XCB_PRESENT_CAPABILITY_SYNCOBJ) &&
             wsi_device_supports_explicit_sync(wsi_device),
 #else
             false,
 #endif
       };
-      if (use_modifiers(wsi_device)) {
+      if (!use_ahb_socket && use_modifiers(wsi_device)) {
          wsi_x11_get_dri3_modifiers(wsi_conn, conn, window, bit_depth, 32,
                                     modifiers, num_modifiers,
                                     &drm_image_params.num_modifier_lists,
@@ -3278,6 +3599,17 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->base.poll_early_refresh = x11_poll_early_refresh;
    chain->base.present_mode = present_mode;
    chain->base.image_count = num_images;
+
+   /* Termux-X11 reads the buffer without waiting for its implicit fence, so a present sent while
+    * the GPU still renders shows a partial frame.  That holds for the plain DRI3 fallback too.
+    */
+   chain->ahb_socket_requested = use_ahb_socket;
+   chain->use_ahb_socket = use_ahb_socket;
+#if WSI_X11_HAS_AHB_SOCKET
+   chain->native_create_mem = chain->base.image_info.create_mem;
+   if (use_ahb_socket)
+      chain->base.image_info.create_mem = x11_create_ahb_image_mem;
+#endif
 
    /* This is what Xserver is using. We cannot really query it, but we rely on it working. */
    chain->base.present_timing.time_domain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_KHR;
