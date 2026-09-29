@@ -52,7 +52,8 @@ radv_wsi_get_prime_blit_queue(VkDevice _device)
       return &device->private_sdma_queue->vk;
    }
 
-   if (pdev->info.gfx_level >= GFX9 && !RADV_DEBUG(instance, NO_DMA_BLIT)) {
+   /* Xclipse has no SDMA engine. */
+   if (pdev->info.gfx_level >= GFX9 && pdev->info.ip[AMD_IP_SDMA].num_queues && !RADV_DEBUG(instance, NO_DMA_BLIT)) {
 
       uint32_t queue_family_index = pdev->num_queues;
       for (uint32_t i = 0; i < pdev->num_queues; i++) {
@@ -101,7 +102,11 @@ radv_init_wsi(struct radv_physical_device *pdev)
    if (result != VK_SUCCESS)
       return result;
 
-   pdev->wsi_device.supports_modifiers = true;
+   /* The DRI3 peers of Xclipse (Termux-X11) import only linear buffers without a modifier, so
+    * X11 images are either AHardwareBuffers or copied to a linear buffer.
+    */
+   pdev->wsi_device.supports_modifiers = !pdev->info.is_xclipse;
+   pdev->wsi_device.supports_scanout = !pdev->info.is_xclipse;
    pdev->wsi_device.set_memory_ownership = radv_wsi_set_memory_ownership;
    pdev->wsi_device.get_blit_queue = radv_wsi_get_prime_blit_queue;
 
