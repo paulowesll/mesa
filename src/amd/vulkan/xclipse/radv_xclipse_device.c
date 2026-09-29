@@ -255,11 +255,19 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    /* The vendor kernel honours AMDGPU_GEM_CREATE_VM_ALWAYS_VALID (its own driver uses it). */
    info->has_vm_always_valid = true;
 
+   /* Sparse resources map PRT ranges like the vendor driver (see the SGPU winsys). */
+   info->has_sparse = true;
+   info->has_sparse_image_3d = true;
+   info->has_sparse_image_standard_3d = true;
+   info->has_sparse_unaligned_mip_size = true;
+
+   /* Scalar loads from unmapped PRT pages hang the GPU, as on AMD (has_smem_with_null_prt_bug),
+    * and the vendor kernel does not report the address bit of the workaround.  The VA range ends
+    * at 1 << 47; the SGPU winsys keeps the upper half for the high aliases of sparse buffers.
+    */
+   info->address_prt_wa_control_bit = 46;
+
    /* Not provided by the vendor kernel driver. */
-   info->has_sparse = false;
-   info->has_sparse_image_3d = false;
-   info->has_sparse_image_standard_3d = false;
-   info->has_sparse_unaligned_mip_size = false;
    info->has_userptr = false;
    info->kernel_has_modifiers = false;
    info->has_fence_to_handle = false;
@@ -307,4 +315,7 @@ radv_xclipse_fixup_features(struct vk_features *features)
 
    /* No ray tracing (radv_enable_rt). */
    features->rayQuery = false;
+
+   /* Unmapped sparse texels are reported resident; the vendor driver does not expose it either. */
+   features->shaderResourceResidency = false;
 }

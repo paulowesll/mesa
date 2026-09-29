@@ -42,6 +42,9 @@ struct radv_sgpu_api {
                          uint64_t flags);
    int (*va_range_free)(amdgpu_va_handle va);
    int (*bo_va_op)(amdgpu_bo_handle bo, uint64_t offset, uint64_t size, uint64_t addr, uint64_t flags, uint32_t op);
+   /* Also maps ranges without a BO (sparse PRT). */
+   int (*bo_va_op_raw)(amdgpu_device_handle device, amdgpu_bo_handle bo, uint64_t offset, uint64_t size,
+                       uint64_t addr, uint64_t flags, uint32_t op);
    int (*ctx_create2)(amdgpu_device_handle device, uint32_t priority, amdgpu_context_handle *context);
    int (*ctx_free)(amdgpu_context_handle context);
    int (*cs_submit_raw)(amdgpu_device_handle device, amdgpu_context_handle context,
@@ -73,6 +76,14 @@ struct radv_sgpu_winsys {
    uint64_t allocated_gtt;
    /* Bump cursor of the capture/replay VA window. */
    uint64_t replay_va_cursor;
+
+   /* The VA range with the PRT workaround control bit, kept free for the high aliases of sparse
+    * buffers (see radv_sgpu_virtual_bo_create).
+    */
+   amdgpu_va_handle prt_wa_va;
+   /* Zero BO behind the low alias of sparse buffers, created on first use. */
+   simple_mtx_t null_prt_lock;
+   struct radeon_winsys_bo *null_prt_bo;
 };
 
 struct radv_sgpu_bo {
@@ -88,6 +99,8 @@ struct radv_sgpu_bo {
    /* Created with AMDGPU_GEM_CREATE_VM_ALWAYS_VALID: never listed in a CS BO list. */
    bool is_local;
    bool va_mapped;
+   /* Sparse buffer with a low alias that scalar loads read (RADEON_FLAG_EMULATE_SPARSE_RESIDENCY). */
+   bool emulate_sparse_residency;
 
    void *cpu_map;
    bool cpu_mapped;

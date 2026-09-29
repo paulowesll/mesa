@@ -71,6 +71,7 @@ radv_sgpu_load_api(void *lib, struct radv_sgpu_api *api)
    LOAD(va_range_alloc, "amdgpu_va_range_alloc");
    LOAD(va_range_free, "amdgpu_va_range_free");
    LOAD(bo_va_op, "amdgpu_bo_va_op");
+   LOAD(bo_va_op_raw, "amdgpu_bo_va_op_raw");
    LOAD(ctx_create2, "amdgpu_cs_ctx_create2");
    LOAD(ctx_free, "amdgpu_cs_ctx_free");
    LOAD(cs_submit_raw, "amdgpu_cs_submit_raw");
@@ -160,6 +161,10 @@ radv_sgpu_winsys_destroy(struct radeon_winsys *_ws)
 {
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
 
+   if (ws->null_prt_bo)
+      ws->base.buffer_destroy(&ws->base, ws->null_prt_bo);
+   ws->api.va_range_free(ws->prt_wa_va);
+   simple_mtx_destroy(&ws->null_prt_lock);
    ws->sync_provider->finalize(ws->sync_provider);
    ws->api.device_deinitialize(ws->device);
    dlclose(ws->vendor_lib);
@@ -199,7 +204,24 @@ radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_wi
       goto fail;
    }
 
+   /* No ordinary BO may carry the PRT workaround bit: scalar loads and UBO descriptors clear it
+    * (has_smem_with_null_prt_bug), so reserve the whole range that has it.
+    */
+   const uint64_t prt_wa_base = 1ull << info->address_prt_wa_control_bit;
+   uint64_t prt_wa_va = 0;
+   if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, prt_wa_base, 65536, prt_wa_base,
+                              &prt_wa_va, &ws->prt_wa_va, 0) ||
+       prt_wa_va != prt_wa_base) {
+      fprintf(stderr, "radv/sgpu: could not reserve the sparse alias VA range.\n");
+      if (ws->prt_wa_va)
+         ws->api.va_range_free(ws->prt_wa_va);
+      ws->sync_provider->finalize(ws->sync_provider);
+      ws->api.device_deinitialize(ws->device);
+      goto fail;
+   }
+
    simple_mtx_init(&ws->lock, mtx_plain);
+   simple_mtx_init(&ws->null_prt_lock, mtx_plain);
    list_inithead(&ws->resident_bos);
 
    ws->base.destroy = radv_sgpu_winsys_destroy;

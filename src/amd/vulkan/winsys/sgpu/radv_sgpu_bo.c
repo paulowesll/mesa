@@ -51,6 +51,14 @@ radv_sgpu_create_flags(enum radeon_bo_flag flags)
    return result;
 }
 
+#define SGPU_NULL_PRT_BO_SIZE (8u * 1024 * 1024)
+
+static VkResult radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned alignment,
+                                            enum radeon_bo_flag flags, uint64_t address,
+                                            struct radeon_winsys_bo **out_bo);
+static VkResult radv_sgpu_buffer_make_resident(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo,
+                                               bool resident);
+
 static VkResult
 radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned alignment, enum radeon_bo_domain domain,
                         enum radeon_bo_flag flags, unsigned priority, uint64_t address,
@@ -64,7 +72,7 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
    *out_bo = NULL;
 
    if (flags & RADEON_FLAG_VIRTUAL)
-      return VK_ERROR_FEATURE_NOT_PRESENT;
+      return radv_sgpu_virtual_bo_create(ws, size, alignment, flags, address, out_bo);
 
    alignment = MAX2(alignment, 4096u);
    const uint64_t alloc_size = align64(MAX2(size, 1), alignment);
@@ -168,6 +176,17 @@ radv_sgpu_bo_remove_resident_locked(struct radv_sgpu_bo *bo)
 static void
 radv_sgpu_bo_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo)
 {
+   if (bo->base.is_virtual) {
+      const uint64_t low_va = bo->base.va & ~(1ull << ws->info.address_prt_wa_control_bit);
+
+      ws->api.bo_va_op_raw(ws->device, NULL, 0, bo->alloc_size, bo->base.va, 0, AMDGPU_VA_OP_CLEAR);
+      if (bo->emulate_sparse_residency)
+         ws->api.bo_va_op_raw(ws->device, NULL, 0, bo->alloc_size, low_va, 0, AMDGPU_VA_OP_CLEAR);
+      ws->api.va_range_free(bo->va);
+      free(bo);
+      return;
+   }
+
    if (bo->fixed_mapped)
       munmap(bo->fixed_map, bo->base.size);
    if (bo->cpu_mapped)
@@ -448,11 +467,145 @@ radv_sgpu_buffer_get_metadata(struct radeon_winsys *_ws, struct radeon_winsys_bo
    *md = radv_sgpu_bo(_bo)->metadata;
 }
 
+/* Sparse resources, as in the vendor driver and the amdgpu winsys: a VA range mapped PRT, where
+ * reads of unbound pages return zero and writes are dropped, and pages bound by replacing
+ * parts of it.
+ *
+ * Scalar loads from unbound PRT pages hang the GPU.  Buffers that shaders may read that way
+ * (RADEON_FLAG_EMULATE_SPARSE_RESIDENCY) live at their VA with the PRT workaround control bit
+ * set; scalar loads clear the bit (ac_nir_fixup_smem_loads_null_prt), and the low alias maps
+ * the same pages, with a zero BO where nothing is bound.
+ */
 static VkResult
-radv_sgpu_buffer_virtual_bind(struct radeon_winsys *_ws, struct radeon_winsys_bo *parent, uint64_t offset,
-                              uint64_t size, struct radeon_winsys_bo *bo, uint64_t bo_offset)
+radv_sgpu_init_null_prt_bo(struct radv_sgpu_winsys *ws)
 {
-   return VK_ERROR_FEATURE_NOT_PRESENT;
+   VkResult result = VK_SUCCESS;
+
+   simple_mtx_lock(&ws->null_prt_lock);
+   if (!ws->null_prt_bo) {
+      struct radeon_winsys_bo *bo;
+
+      result = ws->base.buffer_create(&ws->base, SGPU_NULL_PRT_BO_SIZE, 4096, RADEON_DOMAIN_GTT,
+                                      RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING,
+                                      RADV_BO_PRIORITY_VIRTUAL, 0, &bo);
+      if (result == VK_SUCCESS) {
+         void *map = ws->base.buffer_map(&ws->base, bo, false, NULL);
+         if (map) {
+            memset(map, 0, SGPU_NULL_PRT_BO_SIZE);
+            ws->base.buffer_unmap(&ws->base, bo, false);
+            ws->null_prt_bo = bo;
+         } else {
+            ws->base.buffer_destroy(&ws->base, bo);
+            result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+         }
+      }
+   }
+   simple_mtx_unlock(&ws->null_prt_lock);
+
+   return result;
+}
+
+/* Maps [va, va + size) to the zero BO, read-only. */
+static int
+radv_sgpu_bind_null_prt(struct radv_sgpu_winsys *ws, uint64_t va, uint64_t size, uint32_t op)
+{
+   struct radv_sgpu_bo *null_bo = radv_sgpu_bo(ws->null_prt_bo);
+
+   for (uint64_t offset = 0; offset < size; offset += SGPU_NULL_PRT_BO_SIZE) {
+      const uint64_t chunk_size = MIN2(size - offset, SGPU_NULL_PRT_BO_SIZE);
+      int ret = ws->api.bo_va_op_raw(ws->device, null_bo->bo, 0, chunk_size, va + offset, AMDGPU_VM_PAGE_READABLE,
+                                     op);
+      if (ret)
+         return ret;
+   }
+
+   return 0;
+}
+
+static VkResult
+radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned alignment,
+                            enum radeon_bo_flag flags, uint64_t address, struct radeon_winsys_bo **out_bo)
+{
+   const uint64_t prt_wa_bit = 1ull << ws->info.address_prt_wa_control_bit;
+   const bool emulate_sparse_residency = flags & RADEON_FLAG_EMULATE_SPARSE_RESIDENCY;
+   uint64_t va = 0;
+   int ret;
+
+   if (emulate_sparse_residency) {
+      VkResult result = radv_sgpu_init_null_prt_bo(ws);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+
+   struct radv_sgpu_bo *bo = calloc(1, sizeof(*bo));
+   if (!bo)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+   const uint64_t alloc_size = align64(MAX2(size, 1), MAX2(alignment, 65536u));
+
+   /* The low alias is an ordinary VA; the high one is in the range reserved at creation. */
+   if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, MAX2(alignment, 65536u),
+                              address & ~prt_wa_bit, &va, &bo->va, 0)) {
+      free(bo);
+      return address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   }
+
+   bo->ws = ws;
+   bo->alloc_size = alloc_size;
+   bo->emulate_sparse_residency = emulate_sparse_residency;
+   /* No kernel BO: never in a CS BO list. */
+   bo->is_local = true;
+   list_inithead(&bo->resident_link);
+
+   bo->base.va = emulate_sparse_residency ? va | prt_wa_bit : va;
+   bo->base.size = size;
+   bo->base.initial_domain = RADEON_DOMAIN_GTT;
+   bo->base.is_virtual = true;
+   bo->base.obj_id = bo->base.va;
+
+   ret = ws->api.bo_va_op_raw(ws->device, NULL, 0, alloc_size, bo->base.va, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
+   if (!ret && emulate_sparse_residency)
+      ret = radv_sgpu_bind_null_prt(ws, va, alloc_size, AMDGPU_VA_OP_MAP);
+   if (ret) {
+      fprintf(stderr, "radv/sgpu: could not reserve a PRT range (%d).\n", ret);
+      simple_mtx_lock(&ws->lock);
+      radv_sgpu_bo_release_locked(ws, bo);
+      simple_mtx_unlock(&ws->lock);
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   }
+
+   *out_bo = &bo->base;
+   return VK_SUCCESS;
+}
+
+static VkResult
+radv_sgpu_buffer_virtual_bind(struct radeon_winsys *_ws, struct radeon_winsys_bo *_parent, uint64_t offset,
+                              uint64_t size, struct radeon_winsys_bo *_bo, uint64_t bo_offset)
+{
+   struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
+   struct radv_sgpu_bo *parent = radv_sgpu_bo(_parent);
+   struct radv_sgpu_bo *bo = _bo ? radv_sgpu_bo(_bo) : NULL;
+   const uint64_t va = parent->base.va + offset;
+   const uint64_t low_va = va & ~(1ull << ws->info.address_prt_wa_control_bit);
+   int ret;
+
+   assert(parent->base.is_virtual && (!bo || !bo->base.is_virtual));
+
+   if (bo) {
+      ret = ws->api.bo_va_op_raw(ws->device, bo->bo, bo_offset, size, va, bo->vm_flags, AMDGPU_VA_OP_REPLACE);
+      if (!ret && parent->emulate_sparse_residency)
+         ret = ws->api.bo_va_op_raw(ws->device, bo->bo, bo_offset, size, low_va, bo->vm_flags, AMDGPU_VA_OP_REPLACE);
+
+      /* A submission lists only the BOs its command streams reference. */
+      if (!ret && !bo->is_local)
+         radv_sgpu_buffer_make_resident(_ws, _bo, true);
+   } else {
+      ret = ws->api.bo_va_op_raw(ws->device, NULL, 0, size, va, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
+      if (!ret && parent->emulate_sparse_residency)
+         ret = radv_sgpu_bind_null_prt(ws, low_va, size, AMDGPU_VA_OP_REPLACE);
+   }
+
+   return ret ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS;
 }
 
 /* RADV makes resident the allocations it reaches through descriptors only; they must go with
