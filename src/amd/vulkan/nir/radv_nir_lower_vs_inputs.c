@@ -341,9 +341,14 @@ lower_load_vs_input(nir_builder *b, nir_intrinsic_instr *intrin, lower_vs_inputs
    unsigned align_mul = MAX2(1, s->gfx_state->vi.vertex_binding_align[attrib_binding]);
    unsigned align_offset = (base_offset + offset_within_element) % align_mul;
 
-   /* The alignment might be lower than the minimum if it's unknown. */
+   /* The alignment might be lower than the minimum if it's unknown.
+    *
+    * Xclipse returns garbage for buffer loads that are not dword-aligned, so keep the real
+    * alignment there and let the backend split the fetch: unaligned attributes are legal with
+    * VK_EXT_legacy_vertex_attributes.
+    */
    const unsigned min_channel_align = vtx_info->chan_byte_size ? vtx_info->chan_byte_size : vtx_info->element_size;
-   if (nir_combined_align(align_mul, align_offset) < min_channel_align) {
+   if (nir_combined_align(align_mul, align_offset) < min_channel_align && !s->compiler_info->ac->is_xclipse) {
       align_mul = min_channel_align;
       align_offset = 0;
    }
