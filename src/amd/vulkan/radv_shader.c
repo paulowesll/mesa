@@ -2490,7 +2490,7 @@ radv_postprocess_binary_config(const struct radv_compiler_info *compiler_info, s
          if (gfx_level >= GFX10) {
             if (info->vs.needs_instance_id) {
                vgpr_comp_cnt = gfx_level >= GFX12 ? 1 : 3;
-            } else if (gfx_level <= GFX10_3) {
+            } else if (gfx_level <= GFX10_3 || compiler_info->ac->is_xclipse) {
                vgpr_comp_cnt = 1;
             }
             config->rsrc2 |= S_00B42C_EXCP_EN_GFX6(excp_en);

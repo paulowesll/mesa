@@ -52,6 +52,8 @@ struct radv_shader_args_state {
    struct radv_shader_args *args;
    bool gather_debug_info;
    void *ctx;
+   /* The merged LS-HS gets the GFX10 inputs (see ac_nir_lower_intrinsics_to_args_options). */
+   bool gfx10_ls_hs_inputs;
    const char *arg_names[AC_MAX_ARGS];
    BITSET_DECLARE(user_data, AC_MAX_ARGS);
 };
@@ -224,7 +226,7 @@ declare_vs_input_vgprs(struct radv_shader_args_state *state, enum amd_gfx_level 
       if (gfx_level >= GFX12) {
          RADV_ADD_ARG(state, AC_ARG_VGPR, 1, AC_ARG_VALUE, ac.instance_id);
       } else if (info->vs.as_ls || merged_vs_tcs) {
-         if (gfx_level >= GFX11) {
+         if (gfx_level >= GFX11 && !state->gfx10_ls_hs_inputs) {
             RADV_ADD_NULL_ARG(state, AC_ARG_VGPR, 1, AC_ARG_VALUE); /* user VGPR */
             RADV_ADD_NULL_ARG(state, AC_ARG_VGPR, 1, AC_ARG_VALUE); /* user VGPR */
             RADV_ADD_ARG(state, AC_ARG_VGPR, 1, AC_ARG_VALUE, ac.instance_id);
@@ -379,6 +381,7 @@ radv_init_shader_args(const struct radv_compiler_info *compiler_info, struct rad
 {
    memset(state->args, 0, sizeof(*state->args));
 
+   state->gfx10_ls_hs_inputs = compiler_info->ac->is_xclipse;
    state->args->explicit_scratch_args = !compiler_info->key.use_llvm;
    state->args->remap_spi_ps_input = !compiler_info->key.use_llvm;
 

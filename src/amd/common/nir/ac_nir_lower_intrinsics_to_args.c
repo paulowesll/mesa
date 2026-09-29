@@ -64,7 +64,7 @@ load_subgroup_id_lowered(lower_intrinsics_to_args_state *s, nir_builder *b)
          return ac_nir_unpack_arg_wg_div(b, s->args, s->args->tg_size, 6, 6);
       }
    } else if (s->options->hw_stage == AC_HW_HULL_SHADER) {
-      if (s->options->gfx_level >= GFX11) {
+      if (s->options->gfx_level >= GFX11 && !s->options->gfx10_ls_hs_inputs) {
          assert(s->args->tcs_wave_id.used);
          return ac_nir_unpack_arg_wg_div(b, s->args, s->args->tcs_wave_id, 0, 3);
       } else if (b->shader->info.stage == MESA_SHADER_TESS_CTRL) {
@@ -496,7 +496,8 @@ lower_intrinsic_to_arg(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
    }
    case nir_intrinsic_load_local_invocation_index:
       /* GFX11 HS has subgroup_id, so use it instead of vs_rel_patch_id. */
-      if (s->options->gfx_level < GFX11 && b->shader->info.stage == MESA_SHADER_VERTEX &&
+      if ((s->options->gfx_level < GFX11 || s->options->gfx10_ls_hs_inputs) &&
+          b->shader->info.stage == MESA_SHADER_VERTEX &&
           (s->options->hw_stage == AC_HW_LOCAL_SHADER || s->options->hw_stage == AC_HW_HULL_SHADER)) {
          if (!s->vs_rel_patch_id) {
             s->vs_rel_patch_id = preload_arg(s, b->impl, s->args->vs_rel_patch_id,

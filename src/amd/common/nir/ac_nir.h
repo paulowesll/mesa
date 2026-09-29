@@ -103,6 +103,10 @@ typedef struct {
    unsigned workgroup_size;
    bool use_llvm;
    bool load_grid_size_from_user_sgpr;
+   /* The merged LS-HS gets the GFX10 inputs although gfx_level is GFX11 (Xclipse): the LS has its
+    * relative vertex index in a VGPR, and the HS has no wave ID SGPR.
+    */
+   bool gfx10_ls_hs_inputs;
 } ac_nir_lower_intrinsics_to_args_options;
 
 bool ac_nir_lower_intrinsics_to_args(nir_shader *shader, const struct ac_shader_args *ac_args,
