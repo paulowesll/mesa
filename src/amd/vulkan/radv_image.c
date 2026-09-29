@@ -1047,6 +1047,47 @@ radv_get_ac_surf_info(struct radv_device *device, const struct radv_image *image
    return info;
 }
 
+/* Xclipse: BC7, BC6H and BC5_UNORM are transcoded to ASTC 4x4, whose blocks have the size of the BC
+ * blocks (see radv_bc_emulation_format).  Plane 1 can then alias plane 0 and each block be transcoded
+ * in place, which halves the memory, but the BC payload is gone afterwards: only for images that
+ * can never be read back as BC.
+ */
+static bool
+radv_bc_transcodes_in_place(const struct radv_physical_device *pdev, const struct radv_image *image)
+{
+   const VkFormat plane_format = radv_bc_emulation_format(pdev, image->vk.format);
+
+   if (plane_format == VK_FORMAT_UNDEFINED ||
+       vk_format_get_blocksize(plane_format) != vk_format_get_blocksize(image->vk.format) ||
+       radv_format_description(plane_format)->layout != UTIL_FORMAT_LAYOUT_ASTC)
+      return false;
+
+   return !(image->vk.usage & (VK_IMAGE_USAGE_2_TRANSFER_SRC_BIT_KHR | VK_IMAGE_USAGE_2_HOST_TRANSFER_BIT_KHR)) &&
+          !(image->vk.create_flags &
+            (VK_IMAGE_CREATE_2_MUTABLE_FORMAT_BIT_KHR | VK_IMAGE_CREATE_2_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT_KHR));
+}
+
+/* Whether two surfaces have the same memory layout, so that one can alias the other. */
+static bool
+radv_surfaces_alias(const struct radeon_surf *a, const struct radeon_surf *b, unsigned levels)
+{
+   if (a->surf_size != b->surf_size || a->total_size != b->total_size || a->bpe != b->bpe || a->blk_w != b->blk_w ||
+       a->blk_h != b->blk_h || a->meta_size || b->meta_size || a->cmask_size || b->cmask_size ||
+       a->surf_alignment_log2 != b->surf_alignment_log2)
+      return false;
+
+   const struct gfx9_surf_layout *x = &a->u.gfx9, *y = &b->u.gfx9;
+   if (x->swizzle_mode != y->swizzle_mode || x->epitch != y->epitch || x->surf_pitch != y->surf_pitch ||
+       x->surf_height != y->surf_height || x->surf_slice_size != y->surf_slice_size)
+      return false;
+
+   for (unsigned l = 0; l < levels && l < RADEON_SURF_MAX_LEVELS; l++) {
+      if (x->offset[l] != y->offset[l] || x->pitch[l] != y->pitch[l])
+         return false;
+   }
+   return true;
+}
+
 static void
 radv_surface_init(struct radv_physical_device *pdev, const struct ac_surf_info *surf_info, struct radeon_surf *surf)
 {
@@ -1217,8 +1258,11 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
          image->planes[plane].surface.flags |= RADEON_SURF_DISABLE_DCC | RADEON_SURF_NO_FMASK | RADEON_SURF_NO_HTILE;
       }
 
+      const bool bc_in_place = plane == 1 && radv_bc_transcodes_in_place(pdev, image);
+
       if (plane > 0 &&
-          image->vk.usage & (VK_IMAGE_USAGE_2_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_2_VIDEO_ENCODE_SRC_BIT_KHR)) {
+          (bc_in_place ||
+           image->vk.usage & (VK_IMAGE_USAGE_2_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_2_VIDEO_ENCODE_SRC_BIT_KHR))) {
          image->planes[plane].surface.flags |= RADEON_SURF_FORCE_SWIZZLE_MODE;
          image->planes[plane].surface.u.gfx9.swizzle_mode = image->planes[0].surface.u.gfx9.swizzle_mode;
       }
@@ -1258,6 +1302,10 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
       } else {
          offset = image->disjoint ? 0 : align64(image->size, 1ull << image->planes[plane].surface.alignment_log2);
          stride = 0; /* 0 means no override */
+
+         if (bc_in_place && !image->disjoint &&
+             radv_surfaces_alias(&image->planes[0].surface, &image->planes[plane].surface, image->vk.mip_levels))
+            offset = image->planes[0].surface.u.gfx9.surf_offset;
       }
 
       if (!ac_surface_override_offset_stride(&pdev->info, &image->planes[plane].surface, image->vk.array_layers,
