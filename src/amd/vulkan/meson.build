@@ -303,6 +303,25 @@ if get_option('radv-xclipse')
     ],
     depfile : 'bc_decoder_spv.h.d',
   )
+
+  foreach s : [
+    ['bc4_bc3_spv.h', 'xclipse/shaders/bc4_bc3_repack.glsl', []],
+    ['bc_astc_spv.h', 'xclipse/shaders/bc_astc_transcoder.glsl', []],
+    ['bc_astc_quality_spv.h', 'xclipse/shaders/bc_astc_transcoder.glsl',
+     ['-DXCLIPSE_ASTC_QUALITY_4BIT', '-DXCLIPSE_BC7_LAYER_ENCODER', '-DXCLIPSE_BC7_OPAQUE_CEM8']],
+    ['bc6h_astc_hdr_spv.h', 'xclipse/shaders/bc6h_astc_hdr.glsl', []],
+  ]
+    libradv_files += custom_target(
+      s[0],
+      input : s[1],
+      output : s[0],
+      command : [
+        prog_glslang, '-V', '-S', 'comp', '-x', s[2], '-o', '@OUTPUT@', '@INPUT@',
+        glslang_quiet, glslang_depfile,
+      ],
+      depfile : s[0] + '.d',
+    )
+  endforeach
 endif
 
 libvulkan_radeon = shared_library(

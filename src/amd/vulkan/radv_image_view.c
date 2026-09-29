@@ -228,6 +228,24 @@ compute_non_block_compressed_view(struct radv_device *device, const struct radv_
                                iview->vk.base_array_layer, nbc_view);
 }
 
+/* Applies a view's component to the channels of an image whose layout is itself swizzled. */
+static VkComponentSwizzle
+radv_view_swizzle_through(VkComponentSwizzle component, VkComponentSwizzle identity, const VkComponentMapping *base)
+{
+   switch (component == VK_COMPONENT_SWIZZLE_IDENTITY ? identity : component) {
+   case VK_COMPONENT_SWIZZLE_R:
+      return base->r;
+   case VK_COMPONENT_SWIZZLE_G:
+      return base->g;
+   case VK_COMPONENT_SWIZZLE_B:
+      return base->b;
+   case VK_COMPONENT_SWIZZLE_A:
+      return base->a;
+   default:
+      return component; /* ZERO or ONE */
+   }
+}
+
 static void
 radv_image_view_make_descriptor(struct radv_image_view *iview, struct radv_device *device, VkFormat vk_format,
                                 const VkComponentMapping *components, bool is_storage_image, bool disable_compression,
@@ -547,9 +565,21 @@ radv_image_view_init(struct radv_image_view *iview, struct radv_device *device,
       plane_count = vk_format_get_plane_count(iview->vk.format);
    }
 
+   VkComponentMapping components = pCreateInfo->components;
+
    /* when the view format is emulated, redirect the view to the hidden plane 1 */
    if (radv_is_format_emulated(pdev, iview->vk.format)) {
       assert(radv_is_format_emulated(pdev, image->vk.format));
+
+      /* Route the view's swizzle through the channels plane 1 keeps a transcoded BC image in. */
+      VkComponentMapping plane_swizzle;
+      if (radv_bc_emulation_swizzle(iview->vk.format, &plane_swizzle)) {
+         components.r = radv_view_swizzle_through(components.r, VK_COMPONENT_SWIZZLE_R, &plane_swizzle);
+         components.g = radv_view_swizzle_through(components.g, VK_COMPONENT_SWIZZLE_G, &plane_swizzle);
+         components.b = radv_view_swizzle_through(components.b, VK_COMPONENT_SWIZZLE_B, &plane_swizzle);
+         components.a = radv_view_swizzle_through(components.a, VK_COMPONENT_SWIZZLE_A, &plane_swizzle);
+      }
+
       iview->plane_id = 1;
       iview->vk.view_format = image->planes[iview->plane_id].format;
       iview->vk.format = image->planes[iview->plane_id].format;
@@ -655,9 +685,9 @@ radv_image_view_init(struct radv_image_view *iview, struct radv_device *device,
    bool enable_compression = extra_create_info ? extra_create_info->enable_compression : false;
    for (unsigned i = 0; i < plane_count; ++i) {
       VkFormat format = vk_format_get_plane_format(iview->vk.view_format, i);
-      radv_image_view_make_descriptor(iview, device, format, &pCreateInfo->components, false, disable_compression,
+      radv_image_view_make_descriptor(iview, device, format, &components, false, disable_compression,
                                       enable_compression, iview->plane_id + i, i, NULL);
-      radv_image_view_make_descriptor(iview, device, format, &pCreateInfo->components, true, disable_compression,
+      radv_image_view_make_descriptor(iview, device, format, &components, true, disable_compression,
                                       enable_compression, iview->plane_id + i, i, sliced_3d);
    }
 

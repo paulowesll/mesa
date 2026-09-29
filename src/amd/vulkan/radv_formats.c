@@ -273,9 +273,10 @@ radv_is_copy_image_indirect_format_supported(const struct radv_physical_device *
    return true;
 }
 
-/* Xclipse samples BC1-BC3, but returns zeros for BC4, BC5 and BC7, so they are emulated: plane 1
- * holds the decoded texels.  Returns the format of plane 1, or VK_FORMAT_UNDEFINED when the format is
- * not emulated.
+/* Xclipse samples BC1-BC3, but returns zeros for BC4-BC7, so they are emulated (see
+ * xclipse/radv_xclipse_bc.c).  Plane 1 is a format the hardware samples: ASTC 4x4, BC3 carrying BC4
+ * in its alpha, or RGBA8 for the signed formats ASTC LDR cannot hold.  Returns the format of plane
+ * 1, or VK_FORMAT_UNDEFINED when the format is not emulated.
  */
 VkFormat
 radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat format)
@@ -285,15 +286,40 @@ radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat forma
 
    switch (format) {
    case VK_FORMAT_BC4_UNORM_BLOCK:
+      return VK_FORMAT_BC3_UNORM_BLOCK;
    case VK_FORMAT_BC4_SNORM_BLOCK:
-   case VK_FORMAT_BC5_UNORM_BLOCK:
    case VK_FORMAT_BC5_SNORM_BLOCK:
-   case VK_FORMAT_BC7_UNORM_BLOCK:
       return VK_FORMAT_R8G8B8A8_UNORM;
+   case VK_FORMAT_BC5_UNORM_BLOCK:
+   case VK_FORMAT_BC7_UNORM_BLOCK:
+      return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
    case VK_FORMAT_BC7_SRGB_BLOCK:
-      return VK_FORMAT_R8G8B8A8_SRGB;
+      return VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+   case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+   case VK_FORMAT_BC6H_SFLOAT_BLOCK:
+      return VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK;
    default:
       return VK_FORMAT_UNDEFINED;
+   }
+}
+
+/* The channels of plane 1 of an emulated BC4_UNORM (BC3 alpha) and BC5_UNORM (ASTC red and alpha)
+ * image, as a swizzle to compose with the one of a view.
+ */
+bool
+radv_bc_emulation_swizzle(VkFormat format, VkComponentMapping *swizzle)
+{
+   switch (format) {
+   case VK_FORMAT_BC4_UNORM_BLOCK:
+      *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO,
+                                      VK_COMPONENT_SWIZZLE_ONE};
+      return true;
+   case VK_FORMAT_BC5_UNORM_BLOCK:
+      *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_ZERO,
+                                      VK_COMPONENT_SWIZZLE_ONE};
+      return true;
+   default:
+      return false;
    }
 }
 
