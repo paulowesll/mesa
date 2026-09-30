@@ -41,6 +41,7 @@ typedef void *drmDevicePtr;
 #include "util/os_drm.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
 #if RADV_XCLIPSE
+#include "winsys/sgpu/radv_sgpu_winsys_public.h"
 #include "xclipse/radv_xclipse.h"
 #endif
 #endif
@@ -3330,9 +3331,15 @@ radv_query_heap_info(struct radv_physical_device *pdev, struct radeon_winsys_hea
 
    memset(heap_info, 0, sizeof(*heap_info));
 
-   /* The SGPU node rejects libdrm_amdgpu's authenticated heap queries. */
-   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU)
+   /* The SGPU node rejects libdrm_amdgpu's authenticated heap queries; what this process holds
+    * is counted by the winsys.
+    */
+   if (pdev->drm_device_type == RADV_DRM_DEVICE_SGPU) {
+#if RADV_XCLIPSE
+      heap_info->allocated_gtt = radv_sgpu_process_allocated();
+#endif
       return;
+   }
 
    simple_mtx_lock(&pdev->drm_device_mtx);
    radv_create_drm_device_locked(pdev);
@@ -3369,7 +3376,7 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
     * in presence of shared buffers).
     */
    if (pdev->info.is_xclipse) {
-      /* One GTT heap; the SGPU node does not report heap usage. */
+      /* One GTT heap; the SGPU node does not report system-wide heap usage. */
       assert(pdev->heaps == RADV_HEAP_GTT && memory_properties->memoryHeapCount == 1);
       const uint64_t heap_size = memory_properties->memoryHeaps[0].size;
       const uint64_t internal_usage = heap_info.allocated_gtt;
@@ -3377,6 +3384,18 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
 
       memoryBudget->heapBudget[0] = heap_size - MIN2(heap_size, total_usage) + internal_usage;
       memoryBudget->heapUsage[0] = internal_usage;
+
+#if RADV_XCLIPSE
+      /* The heap is system RAM.  Once Android runs out of it, its low memory killer ends the
+       * game and SystemUI, so the budget stops a margin short of that and applications that
+       * follow it can shrink their streaming first.
+       */
+      const uint64_t reserve = 1024ull << 20;
+      const uint64_t available = radv_xclipse_available_memory();
+      if (available)
+         memoryBudget->heapBudget[0] =
+            MIN2(memoryBudget->heapBudget[0], internal_usage + available - MIN2(available, reserve));
+#endif
    } else if (!pdev->info.has_dedicated_vram) {
       if (pdev->drirc.performance.enable_unified_heap_on_apu) {
          /* When the heaps are unified, only the visible VRAM heap is exposed on APUs. */

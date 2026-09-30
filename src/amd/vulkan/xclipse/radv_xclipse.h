@@ -16,6 +16,7 @@
 #ifndef RADV_XCLIPSE_H
 #define RADV_XCLIPSE_H
 
+#include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
 struct ac_pm4_state;
@@ -37,6 +38,9 @@ void radv_xclipse_fixup_features(struct vk_features *features);
 /* BC4-BC7 emulation state (radv_meta_decode_bc). */
 VkResult radv_xclipse_bc_init(struct radv_device *device);
 void radv_xclipse_bc_finish(struct radv_device *device);
+
+/* Memory Android can still hand out (MemAvailable), re-read at most every 200 ms; 0 if unknown. */
+uint64_t radv_xclipse_available_memory(void);
 
 /* Adds the register state a graphics preamble starts with. */
 void radv_xclipse_add_native_state(struct ac_pm4_state *pm4);

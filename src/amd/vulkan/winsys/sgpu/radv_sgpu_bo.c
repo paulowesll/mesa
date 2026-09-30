@@ -16,7 +16,17 @@
 #include <sys/mman.h>
 
 #include "drm-uapi/amdgpu_drm.h"
+#include "util/u_atomic.h"
 #include "util/u_math.h"
+#include "radv_sgpu_winsys_public.h"
+
+static uint64_t radv_sgpu_process_gtt;
+
+uint64_t
+radv_sgpu_process_allocated(void)
+{
+   return p_atomic_read(&radv_sgpu_process_gtt);
+}
 
 /* Start of the VA window of capture/replay BOs.  The vendor libdrm ignores
  * AMDGPU_VA_RANGE_REPLAYABLE, so without a separate window a replay's own allocations land on
@@ -152,6 +162,7 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
    bo->base.obj_id = va;
 
    ws->allocated_gtt += alloc_size;
+   p_atomic_add(&radv_sgpu_process_gtt, alloc_size);
    simple_mtx_unlock(&ws->lock);
 
    *out_bo = &bo->base;
@@ -199,6 +210,7 @@ radv_sgpu_bo_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo
       ws->api.bo_free(bo->bo);
 
    ws->allocated_gtt -= MIN2(ws->allocated_gtt, bo->alloc_size);
+   p_atomic_add(&radv_sgpu_process_gtt, -(int64_t)bo->alloc_size);
    free(bo);
 }
 
@@ -385,6 +397,7 @@ radv_sgpu_buffer_from_fd(struct radeon_winsys *_ws, int fd, unsigned priority, s
    bo->base.obj_id = va;
 
    ws->allocated_gtt += aligned_size;
+   p_atomic_add(&radv_sgpu_process_gtt, aligned_size);
    simple_mtx_unlock(&ws->lock);
 
    if (alloc_size)

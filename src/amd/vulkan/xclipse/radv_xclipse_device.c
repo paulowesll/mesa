@@ -24,6 +24,8 @@
 #include "drm-uapi/amdgpu_drm.h"
 #include "util/bitscan.h"
 #include "util/macros.h"
+#include "util/os_time.h"
+#include "util/u_atomic.h"
 #include "util/u_math.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
 #include "winsys/sgpu/radv_sgpu_winsys_public.h"
@@ -285,6 +287,32 @@ finish:
       api.device_deinitialize(device);
    dlclose(lib);
    return result;
+}
+
+uint64_t
+radv_xclipse_available_memory(void)
+{
+   static uint64_t available, read_ns;
+   const uint64_t now = os_time_get_nano();
+
+   if (!p_atomic_read(&read_ns) || now - p_atomic_read(&read_ns) > 200000000ull) {
+      FILE *f = fopen("/proc/meminfo", "r");
+      unsigned long long kb = 0;
+      char line[128];
+
+      while (f && fgets(line, sizeof(line), f)) {
+         if (sscanf(line, "MemAvailable: %llu kB", &kb) == 1)
+            break;
+      }
+      if (f)
+         fclose(f);
+      if (kb) {
+         p_atomic_set(&available, kb * 1024ull);
+         p_atomic_set(&read_ns, now);
+      }
+   }
+
+   return p_atomic_read(&available);
 }
 
 void

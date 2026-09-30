@@ -19,4 +19,7 @@ void *radv_sgpu_open_vendor_library(void);
 
 VkResult radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_winsys **winsys);
 
+/* Memory this process holds in SGPU BOs, across all devices. */
+uint64_t radv_sgpu_process_allocated(void);
+
 #endif /* RADV_SGPU_WINSYS_PUBLIC_H */
