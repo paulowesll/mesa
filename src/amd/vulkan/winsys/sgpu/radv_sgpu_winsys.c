@@ -156,6 +156,83 @@ radv_sgpu_unreserve_vmid(struct radeon_winsys *ws)
 {
 }
 
+/* No ordinary BO may carry the PRT workaround bit: scalar loads and UBO descriptors clear it
+ * (has_smem_with_null_prt_bug), so the whole range that has it stays reserved. libdrm gives every
+ * winsys of a GPU the same device handle and VA manager, so the reservation is shared by all the
+ * winsyses (logical devices) of the process.
+ */
+struct radv_sgpu_prt_wa_range {
+   struct radv_sgpu_prt_wa_range *next;
+   amdgpu_device_handle device;
+   amdgpu_va_handle va;
+   unsigned refcount;
+};
+
+static simple_mtx_t prt_wa_ranges_lock = SIMPLE_MTX_INITIALIZER;
+static struct radv_sgpu_prt_wa_range *prt_wa_ranges;
+
+static bool
+radv_sgpu_reserve_prt_wa_range(struct radv_sgpu_winsys *ws, unsigned control_bit)
+{
+   struct radv_sgpu_prt_wa_range *range;
+
+   simple_mtx_lock(&prt_wa_ranges_lock);
+
+   for (range = prt_wa_ranges; range; range = range->next) {
+      if (range->device == ws->device)
+         break;
+   }
+
+   if (range) {
+      range->refcount++;
+   } else {
+      range = calloc(1, sizeof(*range));
+      if (range) {
+         const uint64_t base = 1ull << control_bit;
+         uint64_t va = 0;
+
+         if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, base, 65536, base, &va, &range->va,
+                                    0) ||
+             va != base) {
+            if (range->va)
+               ws->api.va_range_free(range->va);
+            free(range);
+            range = NULL;
+         } else {
+            range->device = ws->device;
+            range->refcount = 1;
+            range->next = prt_wa_ranges;
+            prt_wa_ranges = range;
+         }
+      }
+   }
+
+   simple_mtx_unlock(&prt_wa_ranges_lock);
+
+   ws->prt_wa_range = range;
+   return range != NULL;
+}
+
+static void
+radv_sgpu_release_prt_wa_range(struct radv_sgpu_winsys *ws)
+{
+   struct radv_sgpu_prt_wa_range *range = ws->prt_wa_range;
+
+   simple_mtx_lock(&prt_wa_ranges_lock);
+
+   if (--range->refcount == 0) {
+      struct radv_sgpu_prt_wa_range **link = &prt_wa_ranges;
+      while (*link != range)
+         link = &(*link)->next;
+      *link = range->next;
+
+      ws->api.va_range_free(range->va);
+      free(range);
+   }
+
+   simple_mtx_unlock(&prt_wa_ranges_lock);
+}
+
 static void
 radv_sgpu_winsys_destroy(struct radeon_winsys *_ws)
 {
@@ -163,7 +240,7 @@ radv_sgpu_winsys_destroy(struct radeon_winsys *_ws)
 
    if (ws->null_prt_bo)
       ws->base.buffer_destroy(&ws->base, ws->null_prt_bo);
-   ws->api.va_range_free(ws->prt_wa_va);
+   radv_sgpu_release_prt_wa_range(ws);
    simple_mtx_destroy(&ws->null_prt_lock);
    ws->sync_provider->finalize(ws->sync_provider);
    ws->api.device_deinitialize(ws->device);
@@ -204,17 +281,8 @@ radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_wi
       goto fail;
    }
 
-   /* No ordinary BO may carry the PRT workaround bit: scalar loads and UBO descriptors clear it
-    * (has_smem_with_null_prt_bug), so reserve the whole range that has it.
-    */
-   const uint64_t prt_wa_base = 1ull << info->address_prt_wa_control_bit;
-   uint64_t prt_wa_va = 0;
-   if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, prt_wa_base, 65536, prt_wa_base,
-                              &prt_wa_va, &ws->prt_wa_va, 0) ||
-       prt_wa_va != prt_wa_base) {
+   if (!radv_sgpu_reserve_prt_wa_range(ws, info->address_prt_wa_control_bit)) {
       fprintf(stderr, "radv/sgpu: could not reserve the sparse alias VA range.\n");
-      if (ws->prt_wa_va)
-         ws->api.va_range_free(ws->prt_wa_va);
       ws->sync_provider->finalize(ws->sync_provider);
       ws->api.device_deinitialize(ws->device);
       goto fail;

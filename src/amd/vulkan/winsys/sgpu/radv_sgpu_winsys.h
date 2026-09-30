@@ -80,7 +80,7 @@ struct radv_sgpu_winsys {
    /* The VA range with the PRT workaround control bit, kept free for the high aliases of sparse
     * buffers (see radv_sgpu_virtual_bo_create).
     */
-   amdgpu_va_handle prt_wa_va;
+   struct radv_sgpu_prt_wa_range *prt_wa_range;
    /* Zero BO behind the low alias of sparse buffers, created on first use. */
    simple_mtx_t null_prt_lock;
    struct radeon_winsys_bo *null_prt_bo;
