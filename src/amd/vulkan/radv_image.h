@@ -75,6 +75,10 @@ struct radv_image {
 
    unsigned plane_count;
    bool disjoint;
+
+   /* Xclipse: plane 1 (ASTC) aliases the BC payload of plane 0, see radv_bc_transcodes_in_place. */
+   bool bc_in_place;
+
    struct radv_image_plane planes[0];
 };
 

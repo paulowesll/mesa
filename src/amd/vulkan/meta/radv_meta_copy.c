@@ -884,7 +884,12 @@ radv_CmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2 *pCopyI
       }
    }
 
-   if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER) {
+   /* Xclipse BC transcoded in place: the copy moved ASTC blocks, which the destination samples as is. */
+   const bool copied_transcoded = src_image->bc_in_place && dst_image->bc_in_place &&
+                                  vk_format_no_srgb(src_image->vk.format) == vk_format_no_srgb(dst_image->vk.format);
+
+   if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER &&
+       !copied_transcoded) {
       cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_SYNC_PS |
                                       radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                                             VK_ACCESS_2_TRANSFER_WRITE_BIT, 0, dst_image, NULL) |

@@ -1019,6 +1019,7 @@ radv_image_reset_layout(const struct radv_physical_device *pdev, struct radv_ima
 {
    image->size = 0;
    image->alignment = 1;
+   image->bc_in_place = false;
 
    image->tc_compatible_cmask = 0;
    image->fce_pred_offset = image->dcc_pred_offset = 0;
@@ -1068,8 +1069,11 @@ radv_get_ac_surf_info(struct radv_device *device, const struct radv_image *image
 
 /* Xclipse: BC7, BC6H and BC5_UNORM are transcoded to ASTC 4x4, whose blocks have the size of the BC
  * blocks (see radv_bc_emulation_format).  Plane 1 can then alias plane 0 and each block be transcoded
- * in place, which halves the memory, but the BC payload is gone afterwards: only for images that
- * can never be read back as BC.
+ * in place, which halves the memory: the vendor driver needs no more than that and applications
+ * size their texture streaming for it.  The BC payload is gone afterwards, so a copy to another
+ * in-place image of the format moves the ASTC blocks (radv_CmdCopyImage2), while a copy to an
+ * uncompressed image or a buffer returns ASTC.  Uncompressed views would see ASTC as well, and host
+ * copies would have to transcode, so those images keep a separate plane.
  */
 static bool
 radv_bc_transcodes_in_place(const struct radv_physical_device *pdev, const struct radv_image *image)
@@ -1081,9 +1085,8 @@ radv_bc_transcodes_in_place(const struct radv_physical_device *pdev, const struc
        radv_format_description(plane_format)->layout != UTIL_FORMAT_LAYOUT_ASTC)
       return false;
 
-   return !(image->vk.usage & (VK_IMAGE_USAGE_2_TRANSFER_SRC_BIT_KHR | VK_IMAGE_USAGE_2_HOST_TRANSFER_BIT_KHR)) &&
-          !(image->vk.create_flags &
-            (VK_IMAGE_CREATE_2_MUTABLE_FORMAT_BIT_KHR | VK_IMAGE_CREATE_2_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT_KHR));
+   return !(image->vk.usage & VK_IMAGE_USAGE_2_HOST_TRANSFER_BIT_KHR) &&
+          !(image->vk.create_flags & VK_IMAGE_CREATE_2_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT_KHR);
 }
 
 /* Whether two surfaces have the same memory layout, so that one can alias the other. */
@@ -1323,8 +1326,10 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
          stride = 0; /* 0 means no override */
 
          if (bc_in_place && !image->disjoint &&
-             radv_surfaces_alias(&image->planes[0].surface, &image->planes[plane].surface, image->vk.mip_levels))
+             radv_surfaces_alias(&image->planes[0].surface, &image->planes[plane].surface, image->vk.mip_levels)) {
             offset = image->planes[0].surface.u.gfx9.surf_offset;
+            image->bc_in_place = true;
+         }
       }
 
       if (!ac_surface_override_offset_stride(&pdev->info, &image->planes[plane].surface, image->vk.array_layers,
