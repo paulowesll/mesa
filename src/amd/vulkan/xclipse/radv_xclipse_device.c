@@ -6,16 +6,14 @@
 
 /* Xclipse device identity and properties.
  *
- * The kernel driver is Samsung's, so the device is queried through the vendor libdrm
- * (libdrm_sgpu.so, same ABI as libdrm_amdgpu), loaded with dlopen so RADV does not link
- * against it.  The result is a radeon_info that selects the Phoenix/GFX11 profile plus
- * the Xclipse facts measured on hardware.
+ * The kernel driver is Samsung's, but it takes the amdgpu UAPI, so the device is queried
+ * through libdrm_amdgpu.  The result is a radeon_info that selects the Phoenix/GFX11 profile
+ * plus the Xclipse facts measured on hardware.
  */
 
 #include "radv_xclipse.h"
 
 #include <amdgpu.h>
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,33 +40,19 @@
 #define XCLIPSE_RB_PER_SE           4u
 #define XCLIPSE_MAX_WAVES_PER_SIMD  16u
 
-struct radv_xclipse_api {
-   int (*device_initialize)(int fd, uint32_t *major, uint32_t *minor, amdgpu_device_handle *device);
-   int (*device_deinitialize)(amdgpu_device_handle device);
-   int (*query_gpu_info)(amdgpu_device_handle device, struct amdgpu_gpu_info *info);
-   int (*query_info)(amdgpu_device_handle device, unsigned info_id, unsigned size, void *value);
-   int (*query_hw_ip_count)(amdgpu_device_handle device, unsigned type, uint32_t *count);
-   int (*query_hw_ip_info)(amdgpu_device_handle device, unsigned type, unsigned ip_instance,
-                           struct drm_amdgpu_info_hw_ip *info);
-   const char *(*get_marketing_name)(amdgpu_device_handle device);
-};
-
-static bool
-radv_xclipse_load_api(void *lib, struct radv_xclipse_api *api)
+/* The marketing name, as the vendor libdrm derives it from the chip revision. */
+static void
+radv_xclipse_marketing_name(const struct drm_amdgpu_info_device *dev, char *name, size_t size)
 {
-#define LOAD(field, symbol)                                                                        \
-   if (!(*(void **)&api->field = dlsym(lib, symbol)))                                              \
-      return false;
+   static const unsigned series[] = {120, 320, 520, 720, 0, 920};
+   const uint32_t rev = dev->chip_rev;
+   const uint32_t s = (((rev >> 16) & 0xff) - 0x10) & 0xff;
+   const uint32_t idx = (s >> 4) | ((s & 0xf) << 28);
 
-   LOAD(device_initialize, "amdgpu_device_initialize");
-   LOAD(device_deinitialize, "amdgpu_device_deinitialize");
-   LOAD(query_gpu_info, "amdgpu_query_gpu_info");
-   LOAD(query_info, "amdgpu_query_info");
-   LOAD(query_hw_ip_count, "amdgpu_query_hw_ip_count");
-   LOAD(query_hw_ip_info, "amdgpu_query_hw_ip_info");
-   LOAD(get_marketing_name, "amdgpu_get_marketing_name");
-#undef LOAD
-   return true;
+   if (dev->device_id == 0x73a0 && idx < ARRAY_SIZE(series) && series[idx])
+      snprintf(name, size, "Samsung Xclipse %u", (rev >> 24) * 10 + series[idx]);
+   else
+      snprintf(name, size, "Samsung Xclipse");
 }
 
 static void
@@ -121,7 +105,6 @@ VkResult
 radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
 {
    struct radeon_info *info = &out->base;
-   struct radv_xclipse_api api;
    struct drm_amdgpu_info_device dev = {0};
    struct amdgpu_gpu_info gpu = {0};
    struct drm_amdgpu_memory_info mem = {0};
@@ -131,22 +114,14 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
 
    memset(out, 0, sizeof(*out));
 
-   void *lib = radv_sgpu_open_vendor_library();
-   if (!lib || !radv_xclipse_load_api(lib, &api)) {
-      fprintf(stderr, "radv/xclipse: could not load libdrm_sgpu.so.\n");
-      if (lib)
-         dlclose(lib);
-      return VK_ERROR_INCOMPATIBLE_DRIVER;
-   }
-
-   if (api.device_initialize(fd, &drm_major, &drm_minor, &device) || !device) {
-      fprintf(stderr, "radv/xclipse: vendor device initialization failed.\n");
+   if (amdgpu_device_initialize(fd, &drm_major, &drm_minor, &device) || !device) {
+      fprintf(stderr, "radv/xclipse: device initialization failed.\n");
       result = VK_ERROR_INITIALIZATION_FAILED;
       goto finish;
    }
 
-   if (api.query_info(device, AMDGPU_INFO_DEV_INFO, sizeof(dev), &dev) || api.query_gpu_info(device, &gpu) ||
-       api.query_info(device, AMDGPU_INFO_MEMORY, sizeof(mem), &mem)) {
+   if (amdgpu_query_info(device, AMDGPU_INFO_DEV_INFO, sizeof(dev), &dev) || amdgpu_query_gpu_info(device, &gpu) ||
+       amdgpu_query_info(device, AMDGPU_INFO_MEMORY, sizeof(mem), &mem)) {
       fprintf(stderr, "radv/xclipse: device query failed.\n");
       result = VK_ERROR_INITIALIZATION_FAILED;
       goto finish;
@@ -188,10 +163,10 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
       struct drm_amdgpu_info_hw_ip ip = {0};
       uint32_t count = 0;
 
-      if (api.query_hw_ip_info(device, ip_type, 0, &ip) || !ip.available_rings ||
+      if (amdgpu_query_hw_ip_info(device, ip_type, 0, &ip) || !ip.available_rings ||
           !ac_fill_hw_ip_info(info, &dev, ip_type, &ip))
          continue;
-      if (!api.query_hw_ip_count(device, ip_type, &count))
+      if (!amdgpu_query_hw_ip_count(device, ip_type, &count))
          info->ip[ip_type].num_instances = count;
    }
 
@@ -279,13 +254,11 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    info->has_timeline_syncobj = !!(out->syncobj_sync_type.features & VK_SYNC_FEATURE_TIMELINE);
    out->global_priority_mask = BITFIELD_BIT(RADEON_CTX_PRIORITY_LOW);
 
-   const char *name = api.get_marketing_name(device);
-   snprintf(info->marketing_name, sizeof(info->marketing_name), "%s", name ? name : "Samsung Xclipse");
+   radv_xclipse_marketing_name(&dev, info->marketing_name, sizeof(info->marketing_name));
 
 finish:
    if (device)
-      api.device_deinitialize(device);
-   dlclose(lib);
+      amdgpu_device_deinitialize(device);
    return result;
 }
 

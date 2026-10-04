@@ -7,7 +7,6 @@
 #include "radv_sgpu_winsys.h"
 #include "radv_sgpu_winsys_public.h"
 
-#include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,73 +17,6 @@
 #include "util/macros.h"
 #include "util/u_sync_provider.h"
 #include "vk_drm_syncobj.h"
-
-void *
-radv_sgpu_open_vendor_library(void)
-{
-   char sibling[4096] = "";
-   Dl_info dl;
-
-   if (dladdr((void *)radv_sgpu_open_vendor_library, &dl) && dl.dli_fname) {
-      const char *slash = strrchr(dl.dli_fname, '/');
-      if (slash && (size_t)(slash - dl.dli_fname) + sizeof("/libdrm_sgpu.so") <= sizeof(sibling)) {
-         memcpy(sibling, dl.dli_fname, slash - dl.dli_fname);
-         strcpy(sibling + (slash - dl.dli_fname), "/libdrm_sgpu.so");
-      }
-   }
-
-   const char *paths[] = {
-      getenv("RADV_SGPU_VENDOR_LIB"),
-      sibling,
-      "/vendor/lib64/libdrm_sgpu.so",
-      "libdrm_sgpu.so",
-   };
-
-   for (unsigned i = 0; i < ARRAY_SIZE(paths); i++) {
-      if (!paths[i] || !paths[i][0])
-         continue;
-      void *lib = dlopen(paths[i], RTLD_NOW | RTLD_LOCAL);
-      if (lib)
-         return lib;
-   }
-   return NULL;
-}
-
-static bool
-radv_sgpu_load_api(void *lib, struct radv_sgpu_api *api)
-{
-#define LOAD(field, symbol)                                                                        \
-   if (!(*(void **)&api->field = dlsym(lib, symbol)))                                              \
-      return false;
-
-   LOAD(device_initialize, "amdgpu_device_initialize");
-   LOAD(device_deinitialize, "amdgpu_device_deinitialize");
-   LOAD(bo_alloc, "amdgpu_bo_alloc");
-   LOAD(bo_import, "amdgpu_bo_import");
-   LOAD(bo_free, "amdgpu_bo_free");
-   LOAD(bo_export, "amdgpu_bo_export");
-   LOAD(bo_cpu_map, "amdgpu_bo_cpu_map");
-   LOAD(bo_cpu_unmap, "amdgpu_bo_cpu_unmap");
-   LOAD(bo_wait_for_idle, "amdgpu_bo_wait_for_idle");
-   LOAD(bo_query_info, "amdgpu_bo_query_info");
-   LOAD(bo_set_metadata, "amdgpu_bo_set_metadata");
-   LOAD(va_range_alloc, "amdgpu_va_range_alloc");
-   LOAD(va_range_free, "amdgpu_va_range_free");
-   LOAD(bo_va_op, "amdgpu_bo_va_op");
-   LOAD(bo_va_op_raw, "amdgpu_bo_va_op_raw");
-   LOAD(ctx_create2, "amdgpu_cs_ctx_create2");
-   LOAD(ctx_free, "amdgpu_cs_ctx_free");
-   LOAD(cs_submit_raw, "amdgpu_cs_submit_raw");
-   LOAD(cs_query_fence_status, "amdgpu_cs_query_fence_status");
-   LOAD(syncobj_create, "amdgpu_cs_create_syncobj");
-   LOAD(syncobj_destroy, "amdgpu_cs_destroy_syncobj");
-   LOAD(syncobj_signal, "amdgpu_cs_syncobj_signal");
-#undef LOAD
-
-   *(void **)&api->cs_query_reset_state2 = dlsym(lib, "amdgpu_cs_query_reset_state2");
-   *(void **)&api->query_info = dlsym(lib, "amdgpu_query_info");
-   return true;
-}
 
 static uint64_t
 radv_sgpu_query_value(struct radeon_winsys *_ws, enum radeon_value_id value)
@@ -112,8 +44,7 @@ radv_sgpu_query_gpuvm_fault(struct radeon_winsys *_ws, struct radv_winsys_gpuvm_
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
    struct drm_amdgpu_info_gpuvm_fault fault = {0};
 
-   if (!ws->api.query_info ||
-       ws->api.query_info(ws->device, AMDGPU_INFO_GPUVM_FAULT, sizeof(fault), &fault) || !fault.status)
+   if (amdgpu_query_info(ws->device, AMDGPU_INFO_GPUVM_FAULT, sizeof(fault), &fault) || !fault.status)
       return false;
 
    fault_info->addr = fault.addr;
@@ -191,11 +122,11 @@ radv_sgpu_reserve_prt_wa_range(struct radv_sgpu_winsys *ws, unsigned control_bit
          const uint64_t base = 1ull << control_bit;
          uint64_t va = 0;
 
-         if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, base, 65536, base, &va, &range->va,
+         if (amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, base, 65536, base, &va, &range->va,
                                     0) ||
              va != base) {
             if (range->va)
-               ws->api.va_range_free(range->va);
+               amdgpu_va_range_free(range->va);
             free(range);
             range = NULL;
          } else {
@@ -226,7 +157,7 @@ radv_sgpu_release_prt_wa_range(struct radv_sgpu_winsys *ws)
          link = &(*link)->next;
       *link = range->next;
 
-      ws->api.va_range_free(range->va);
+      amdgpu_va_range_free(range->va);
       free(range);
    }
 
@@ -243,8 +174,7 @@ radv_sgpu_winsys_destroy(struct radeon_winsys *_ws)
    radv_sgpu_release_prt_wa_range(ws);
    simple_mtx_destroy(&ws->null_prt_lock);
    ws->sync_provider->finalize(ws->sync_provider);
-   ws->api.device_deinitialize(ws->device);
-   dlclose(ws->vendor_lib);
+   amdgpu_device_deinitialize(ws->device);
    close(ws->fd);
    simple_mtx_destroy(&ws->lock);
    free(ws);
@@ -264,27 +194,21 @@ radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_wi
    if (ws->fd < 0)
       goto fail;
 
-   ws->vendor_lib = radv_sgpu_open_vendor_library();
-   if (!ws->vendor_lib || !radv_sgpu_load_api(ws->vendor_lib, &ws->api)) {
-      fprintf(stderr, "radv/sgpu: could not load libdrm_sgpu.so.\n");
-      goto fail;
-   }
-
-   if (ws->api.device_initialize(ws->fd, &drm_major, &drm_minor, &ws->device) || !ws->device) {
-      fprintf(stderr, "radv/sgpu: vendor device initialization failed.\n");
+   if (amdgpu_device_initialize(ws->fd, &drm_major, &drm_minor, &ws->device) || !ws->device) {
+      fprintf(stderr, "radv/sgpu: device initialization failed.\n");
       goto fail;
    }
 
    ws->sync_provider = util_sync_provider_drm(ws->fd);
    if (!ws->sync_provider) {
-      ws->api.device_deinitialize(ws->device);
+      amdgpu_device_deinitialize(ws->device);
       goto fail;
    }
 
    if (!radv_sgpu_reserve_prt_wa_range(ws, info->address_prt_wa_control_bit)) {
       fprintf(stderr, "radv/sgpu: could not reserve the sparse alias VA range.\n");
       ws->sync_provider->finalize(ws->sync_provider);
-      ws->api.device_deinitialize(ws->device);
+      amdgpu_device_deinitialize(ws->device);
       goto fail;
    }
 
@@ -310,8 +234,6 @@ radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_wi
    return VK_SUCCESS;
 
 fail:
-   if (ws->vendor_lib)
-      dlclose(ws->vendor_lib);
    if (ws->fd >= 0)
       close(ws->fd);
    free(ws);

@@ -279,7 +279,7 @@ struct radeon_info {
    uint32_t chip_external_rev;
    uint32_t chip_rev; /* 0 = A0, 1 = A1, etc. */
 
-   /* Samsung Xclipse (SGPU): a platform device driven through the vendor's libdrm_sgpu.
+   /* Samsung Xclipse (SGPU): a platform device whose kernel driver takes the amdgpu UAPI.
     * family/gfx_level then name the closest common profile (Phoenix/GFX11), while the
     * hardware itself mixes GFX11 and GFX10.3 behaviour; see radv_xclipse_device.c.
     */

@@ -99,7 +99,7 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
 
    simple_mtx_lock(&ws->lock);
 
-   ret = ws->api.bo_alloc(ws->device, &request, &bo->bo);
+   ret = amdgpu_bo_alloc(ws->device, &request, &bo->bo);
    if (ret) {
       fprintf(stderr, "radv/sgpu: amdgpu_bo_alloc failed (%d), size %" PRIu64 ".\n", ret, alloc_size);
       goto fail;
@@ -111,23 +111,23 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
 
    if ((flags & RADEON_FLAG_REPLAYABLE) && !address && !(flags & RADEON_FLAG_32BIT)) {
       const uint64_t base = align64(MAX2(ws->replay_va_cursor, SGPU_REPLAY_VA_WINDOW), alignment);
-      if (!ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, alignment, base, &va, &bo->va,
+      if (!amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, alignment, base, &va, &bo->va,
                                   va_flags) &&
           va == base) {
          ws->replay_va_cursor = base + alloc_size;
       } else {
          if (bo->va)
-            ws->api.va_range_free(bo->va);
+            amdgpu_va_range_free(bo->va);
          bo->va = NULL;
       }
    }
 
    if (!bo->va) {
-      ret = ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, alignment, address, &va,
+      ret = amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, alignment, address, &va,
                                    &bo->va, va_flags);
       if (ret) {
          fprintf(stderr, "radv/sgpu: amdgpu_va_range_alloc failed (%d), size %" PRIu64 ".\n", ret, alloc_size);
-         ws->api.bo_free(bo->bo);
+         amdgpu_bo_free(bo->bo);
          goto fail;
       }
    }
@@ -139,11 +139,11 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
    if (flags & RADEON_FLAG_GL2_BYPASS)
       bo->vm_flags |= AMDGPU_VM_MTYPE_UC;
 
-   ret = ws->api.bo_va_op(bo->bo, 0, alloc_size, va, bo->vm_flags, AMDGPU_VA_OP_MAP);
+   ret = amdgpu_bo_va_op(bo->bo, 0, alloc_size, va, bo->vm_flags, AMDGPU_VA_OP_MAP);
    if (ret) {
       fprintf(stderr, "radv/sgpu: amdgpu_bo_va_op(MAP) failed (%d), va 0x%" PRIx64 ".\n", ret, va);
-      ws->api.va_range_free(bo->va);
-      ws->api.bo_free(bo->bo);
+      amdgpu_va_range_free(bo->va);
+      amdgpu_bo_free(bo->bo);
       goto fail;
    }
 
@@ -190,10 +190,10 @@ radv_sgpu_bo_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo
    if (bo->base.is_virtual) {
       const uint64_t low_va = bo->base.va & ~(1ull << ws->info.address_prt_wa_control_bit);
 
-      ws->api.bo_va_op_raw(ws->device, NULL, 0, bo->alloc_size, bo->base.va, 0, AMDGPU_VA_OP_CLEAR);
+      amdgpu_bo_va_op_raw(ws->device, NULL, 0, bo->alloc_size, bo->base.va, 0, AMDGPU_VA_OP_CLEAR);
       if (bo->emulate_sparse_residency)
-         ws->api.bo_va_op_raw(ws->device, NULL, 0, bo->alloc_size, low_va, 0, AMDGPU_VA_OP_CLEAR);
-      ws->api.va_range_free(bo->va);
+         amdgpu_bo_va_op_raw(ws->device, NULL, 0, bo->alloc_size, low_va, 0, AMDGPU_VA_OP_CLEAR);
+      amdgpu_va_range_free(bo->va);
       free(bo);
       return;
    }
@@ -201,13 +201,13 @@ radv_sgpu_bo_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo
    if (bo->fixed_mapped)
       munmap(bo->fixed_map, bo->base.size);
    if (bo->cpu_mapped)
-      ws->api.bo_cpu_unmap(bo->bo);
+      amdgpu_bo_cpu_unmap(bo->bo);
    if (bo->va_mapped)
-      ws->api.bo_va_op(bo->bo, 0, bo->alloc_size, bo->base.va, 0, AMDGPU_VA_OP_UNMAP);
+      amdgpu_bo_va_op(bo->bo, 0, bo->alloc_size, bo->base.va, 0, AMDGPU_VA_OP_UNMAP);
    if (bo->va)
-      ws->api.va_range_free(bo->va);
+      amdgpu_va_range_free(bo->va);
    if (bo->bo)
-      ws->api.bo_free(bo->bo);
+      amdgpu_bo_free(bo->bo);
 
    ws->allocated_gtt -= MIN2(ws->allocated_gtt, bo->alloc_size);
    p_atomic_add(&radv_sgpu_process_gtt, -(int64_t)bo->alloc_size);
@@ -243,7 +243,7 @@ bool
 radv_sgpu_bo_get_kms_handle_locked(struct radv_sgpu_bo *bo, uint32_t *handle)
 {
    if (!bo->kms_handle_valid) {
-      if (bo->ws->api.bo_export(bo->bo, amdgpu_bo_handle_type_kms, &bo->kms_handle))
+      if (amdgpu_bo_export(bo->bo, amdgpu_bo_handle_type_kms, &bo->kms_handle))
          return false;
       bo->kms_handle_valid = true;
    }
@@ -295,7 +295,7 @@ radv_sgpu_buffer_map(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo, bo
    if (use_fixed_addr) {
       map = radv_sgpu_bo_map_fixed_locked(ws, bo, fixed_addr);
    } else {
-      if (!bo->cpu_mapped && !ws->api.bo_cpu_map(bo->bo, &bo->cpu_map))
+      if (!bo->cpu_mapped && !amdgpu_bo_cpu_map(bo->bo, &bo->cpu_map))
          bo->cpu_mapped = true;
       map = bo->cpu_mapped ? bo->cpu_map : NULL;
    }
@@ -319,7 +319,7 @@ radv_sgpu_buffer_unmap(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo, 
       bo->fixed_map = NULL;
       bo->fixed_mapped = false;
    } else if (bo->cpu_mapped) {
-      ws->api.bo_cpu_unmap(bo->bo);
+      amdgpu_bo_cpu_unmap(bo->bo);
       bo->cpu_map = NULL;
       bo->cpu_mapped = false;
    }
@@ -353,10 +353,10 @@ radv_sgpu_buffer_from_fd(struct radeon_winsys *_ws, int fd, unsigned priority, s
 
    simple_mtx_lock(&ws->lock);
 
-   if (ws->api.bo_import(ws->device, amdgpu_bo_handle_type_dma_buf_fd, (uint32_t)fd, &imported) ||
-       !imported.buf_handle || ws->api.bo_query_info(imported.buf_handle, &info)) {
+   if (amdgpu_bo_import(ws->device, amdgpu_bo_handle_type_dma_buf_fd, (uint32_t)fd, &imported) ||
+       !imported.buf_handle || amdgpu_bo_query_info(imported.buf_handle, &info)) {
       if (imported.buf_handle)
-         ws->api.bo_free(imported.buf_handle);
+         amdgpu_bo_free(imported.buf_handle);
       simple_mtx_unlock(&ws->lock);
       free(bo);
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
@@ -366,16 +366,16 @@ radv_sgpu_buffer_from_fd(struct radeon_winsys *_ws, int fd, unsigned priority, s
    const uint64_t aligned_size = align64(MAX2(size, 1), 4096);
    const uint64_t vm_flags = AMDGPU_VM_PAGE_READABLE | AMDGPU_VM_PAGE_WRITEABLE | AMDGPU_VM_PAGE_EXECUTABLE;
 
-   if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, aligned_size, 4096, 0, &va, &va_handle, 0)) {
-      ws->api.bo_free(imported.buf_handle);
+   if (amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, aligned_size, 4096, 0, &va, &va_handle, 0)) {
+      amdgpu_bo_free(imported.buf_handle);
       simple_mtx_unlock(&ws->lock);
       free(bo);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
    }
 
-   if (ws->api.bo_va_op(imported.buf_handle, 0, aligned_size, va, vm_flags, AMDGPU_VA_OP_MAP)) {
-      ws->api.va_range_free(va_handle);
-      ws->api.bo_free(imported.buf_handle);
+   if (amdgpu_bo_va_op(imported.buf_handle, 0, aligned_size, va, vm_flags, AMDGPU_VA_OP_MAP)) {
+      amdgpu_va_range_free(va_handle);
+      amdgpu_bo_free(imported.buf_handle);
       simple_mtx_unlock(&ws->lock);
       free(bo);
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -412,7 +412,7 @@ radv_sgpu_buffer_get_fd(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo,
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
    uint32_t handle = 0;
 
-   if (ws->api.bo_export(radv_sgpu_bo(_bo)->bo, amdgpu_bo_handle_type_dma_buf_fd, &handle) || handle > INT_MAX)
+   if (amdgpu_bo_export(radv_sgpu_bo(_bo)->bo, amdgpu_bo_handle_type_dma_buf_fd, &handle) || handle > INT_MAX)
       return false;
 
    *fd = (int)handle;
@@ -432,10 +432,10 @@ radv_sgpu_buffer_get_flags_from_fd(struct radeon_winsys *_ws, int fd, enum radeo
    if (fd < 0)
       return false;
 
-   int ret = ws->api.bo_import(ws->device, amdgpu_bo_handle_type_dma_buf_fd, (uint32_t)fd, &imported);
+   int ret = amdgpu_bo_import(ws->device, amdgpu_bo_handle_type_dma_buf_fd, (uint32_t)fd, &imported);
    if (!ret && imported.buf_handle) {
-      ret = ws->api.bo_query_info(imported.buf_handle, &info);
-      ws->api.bo_free(imported.buf_handle);
+      ret = amdgpu_bo_query_info(imported.buf_handle, &info);
+      amdgpu_bo_free(imported.buf_handle);
    }
    if (ret)
       return false;
@@ -471,7 +471,7 @@ radv_sgpu_buffer_set_metadata(struct radeon_winsys *_ws, struct radeon_winsys_bo
                           AMDGPU_TILING_SET(GFX12_SCANOUT, md->u.gfx12.scanout);
    metadata.size_metadata = MIN2(md->size_metadata, (uint32_t)sizeof(metadata.umd_metadata));
    memcpy(metadata.umd_metadata, md->metadata, metadata.size_metadata);
-   ws->api.bo_set_metadata(bo->bo, &metadata);
+   amdgpu_bo_set_metadata(bo->bo, &metadata);
 }
 
 static void
@@ -526,7 +526,7 @@ radv_sgpu_bind_null_prt(struct radv_sgpu_winsys *ws, uint64_t va, uint64_t size,
 
    for (uint64_t offset = 0; offset < size; offset += SGPU_NULL_PRT_BO_SIZE) {
       const uint64_t chunk_size = MIN2(size - offset, SGPU_NULL_PRT_BO_SIZE);
-      int ret = ws->api.bo_va_op_raw(ws->device, null_bo->bo, 0, chunk_size, va + offset, AMDGPU_VM_PAGE_READABLE,
+      int ret = amdgpu_bo_va_op_raw(ws->device, null_bo->bo, 0, chunk_size, va + offset, AMDGPU_VM_PAGE_READABLE,
                                      op);
       if (ret)
          return ret;
@@ -557,7 +557,7 @@ radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned
    const uint64_t alloc_size = align64(MAX2(size, 1), MAX2(alignment, 65536u));
 
    /* The low alias is an ordinary VA; the high one is in the range reserved at creation. */
-   if (ws->api.va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, MAX2(alignment, 65536u),
+   if (amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, MAX2(alignment, 65536u),
                               address & ~prt_wa_bit, &va, &bo->va, 0)) {
       free(bo);
       return address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -576,7 +576,7 @@ radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned
    bo->base.is_virtual = true;
    bo->base.obj_id = bo->base.va;
 
-   ret = ws->api.bo_va_op_raw(ws->device, NULL, 0, alloc_size, bo->base.va, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
+   ret = amdgpu_bo_va_op_raw(ws->device, NULL, 0, alloc_size, bo->base.va, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_MAP);
    if (!ret && emulate_sparse_residency)
       ret = radv_sgpu_bind_null_prt(ws, va, alloc_size, AMDGPU_VA_OP_MAP);
    if (ret) {
@@ -605,15 +605,15 @@ radv_sgpu_buffer_virtual_bind(struct radeon_winsys *_ws, struct radeon_winsys_bo
    assert(parent->base.is_virtual && (!bo || !bo->base.is_virtual));
 
    if (bo) {
-      ret = ws->api.bo_va_op_raw(ws->device, bo->bo, bo_offset, size, va, bo->vm_flags, AMDGPU_VA_OP_REPLACE);
+      ret = amdgpu_bo_va_op_raw(ws->device, bo->bo, bo_offset, size, va, bo->vm_flags, AMDGPU_VA_OP_REPLACE);
       if (!ret && parent->emulate_sparse_residency)
-         ret = ws->api.bo_va_op_raw(ws->device, bo->bo, bo_offset, size, low_va, bo->vm_flags, AMDGPU_VA_OP_REPLACE);
+         ret = amdgpu_bo_va_op_raw(ws->device, bo->bo, bo_offset, size, low_va, bo->vm_flags, AMDGPU_VA_OP_REPLACE);
 
       /* A submission lists only the BOs its command streams reference. */
       if (!ret && !bo->is_local)
          radv_sgpu_buffer_make_resident(_ws, _bo, true);
    } else {
-      ret = ws->api.bo_va_op_raw(ws->device, NULL, 0, size, va, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
+      ret = amdgpu_bo_va_op_raw(ws->device, NULL, 0, size, va, AMDGPU_VM_PAGE_PRT, AMDGPU_VA_OP_REPLACE);
       if (!ret && parent->emulate_sparse_residency)
          ret = radv_sgpu_bind_null_prt(ws, low_va, size, AMDGPU_VA_OP_REPLACE);
    }
@@ -647,7 +647,7 @@ radv_sgpu_bo_wait_for_idle(struct radeon_winsys *_ws, struct radeon_winsys_bo *_
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
    bool busy = false;
 
-   return !ws->api.bo_wait_for_idle(radv_sgpu_bo(_bo)->bo, UINT64_MAX, &busy) && !busy;
+   return !amdgpu_bo_wait_for_idle(radv_sgpu_bo(_bo)->bo, UINT64_MAX, &busy) && !busy;
 }
 
 void

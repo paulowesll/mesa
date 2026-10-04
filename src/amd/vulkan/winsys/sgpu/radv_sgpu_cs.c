@@ -474,8 +474,7 @@ radv_sgpu_mark_lost(struct radv_sgpu_ctx *ctx, enum amd_ip_type ip, int ring, ui
       return;
 
    uint64_t flags = 0;
-   const int r = ctx->ws->api.cs_query_reset_state2 ? ctx->ws->api.cs_query_reset_state2(ctx->context, &flags)
-                                                    : -ENOSYS;
+   const int r = amdgpu_cs_query_reset_state2(ctx->context, &flags);
    fprintf(stderr,
            "radv/sgpu: the kernel cancelled the context (GPU hang) at seq_no %" PRIu64 ", ip %u ring %d; "
            "reset query %d: guilty=%u vram_lost=%u.\n",
@@ -493,7 +492,7 @@ static int
 radv_sgpu_query_fence(struct radv_sgpu_ctx *ctx, struct amdgpu_cs_fence *fence, uint64_t timeout_ns,
                       uint32_t *expired)
 {
-   const int ret = ctx->ws->api.cs_query_fence_status(fence, timeout_ns, 0, expired);
+   const int ret = amdgpu_cs_query_fence_status(fence, timeout_ns, 0, expired);
    if (ret == -ECANCELED)
       radv_sgpu_mark_lost(ctx, fence->ip_type, fence->ring, fence->fence);
    return ret;
@@ -1032,7 +1031,7 @@ radv_sgpu_cs_submit(struct radeon_winsys_ctx *_ctx, const struct radv_winsys_sub
    }
 
    uint64_t seq_no = 0;
-   const int ret = ws->api.cs_submit_raw(ws->device, ctx->context, NULL, s.num_chunks, s.chunks, &seq_no);
+   const int ret = amdgpu_cs_submit_raw(ws->device, ctx->context, NULL, s.num_chunks, s.chunks, &seq_no);
    radv_sgpu_submission_finish(&s);
 
    if (ret) {
@@ -1093,7 +1092,7 @@ radv_sgpu_ctx_create(struct radeon_winsys *_ws, enum radeon_ctx_priority priorit
    if (!ctx)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   if (ws->api.ctx_create2(ws->device, radv_sgpu_ctx_priority(priority), &ctx->context)) {
+   if (amdgpu_cs_ctx_create2(ws->device, radv_sgpu_ctx_priority(priority), &ctx->context)) {
       free(ctx);
       return VK_ERROR_INITIALIZATION_FAILED;
    }
@@ -1139,7 +1138,7 @@ radv_sgpu_ctx_destroy(struct radeon_winsys_ctx *_ctx)
       }
    }
 
-   ws->api.ctx_free(ctx->context);
+   amdgpu_cs_ctx_free(ctx->context);
    simple_mtx_destroy(&ctx->lock);
    free(ctx);
 }

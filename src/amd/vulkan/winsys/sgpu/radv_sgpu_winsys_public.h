@@ -12,11 +12,6 @@
 struct radeon_info;
 struct radeon_winsys;
 
-/* dlopen()s libdrm_sgpu.so: RADV_SGPU_VENDOR_LIB, a copy next to this driver (driver packages
- * ship one), then the system copy.  Returns NULL when none loads.
- */
-void *radv_sgpu_open_vendor_library(void);
-
 VkResult radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_winsys **winsys);
 
 /* Memory this process holds in SGPU BOs, across all devices. */
