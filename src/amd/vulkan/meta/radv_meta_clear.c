@@ -1070,25 +1070,32 @@ radv_clear_htile(struct radv_cmd_buffer *cmd_buffer, const struct radv_image *im
 
    if (level_count != image->vk.mip_levels) {
       assert(pdev->info.gfx_level >= GFX10);
+      uint32_t layer_count = vk_image_subresource_layer_count(&image->vk, range);
 
-      /* Clear individuals levels separately. */
+      /* Clear individuals levels separately. The levels are laid out within each slice, so clear
+       * the level in every layer of the range.
+       */
       for (uint32_t l = 0; l < level_count; l++) {
          uint32_t level = range->baseMipLevel + l;
-         uint64_t htile_offset =
-            image->planes[0].surface.meta_offset + image->planes[0].surface.u.gfx9.meta_levels[level].offset;
          uint32_t size = image->planes[0].surface.u.gfx9.meta_levels[level].size;
 
          /* Do not clear this level if it can be compressed. */
          if (!size)
             continue;
 
-         if (htile_mask == UINT_MAX) {
-            /* Clear the whole HTILE buffer. */
-            flush_bits |= radv_fill_image(cmd_buffer, image, htile_offset, size, value);
-         } else {
-            /* Only clear depth or stencil bytes in the HTILE buffer. */
-            flush_bits |= clear_htile_mask(cmd_buffer, image, image->bindings[0].bo,
-                                           image->bindings[0].addr + htile_offset, size, value, htile_mask);
+         for (uint32_t a = 0; a < layer_count; a++) {
+            uint64_t htile_offset = image->planes[0].surface.meta_offset +
+                                    image->planes[0].surface.meta_slice_size * (range->baseArrayLayer + a) +
+                                    image->planes[0].surface.u.gfx9.meta_levels[level].offset;
+
+            if (htile_mask == UINT_MAX) {
+               /* Clear the whole HTILE buffer. */
+               flush_bits |= radv_fill_image(cmd_buffer, image, htile_offset, size, value);
+            } else {
+               /* Only clear depth or stencil bytes in the HTILE buffer. */
+               flush_bits |= clear_htile_mask(cmd_buffer, image, image->bindings[0].bo,
+                                              image->bindings[0].addr + htile_offset, size, value, htile_mask);
+            }
          }
       }
    } else {
