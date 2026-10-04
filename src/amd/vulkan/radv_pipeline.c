@@ -11,6 +11,7 @@
 #include "radv_pipeline.h"
 #include "meta/radv_meta.h"
 #include "nir/nir.h"
+#include "nir/nir_builder.h"
 #include "nir/radv_nir.h"
 #include "tools/radv_rmv.h"
 #include "util/u_atomic.h"
@@ -248,6 +249,19 @@ non_uniform_access_callback(const nir_src *src, void *_)
    if (src->ssa->num_components == 1)
       return 0x1;
    return nir_chase_binding(*src).success ? 0x2 : 0x3;
+}
+
+/* Xclipse: the vendor compiler converts f32 to f16 toward zero, so values beyond the f16 range
+ * saturate to +-65504 where round-to-nearest-even makes them +-inf.  Conversions without an
+ * explicit RTE execution mode get the vendor's rounding.
+ */
+static bool
+radv_xclipse_f2f16_rtz_instr(nir_builder *b, nir_alu_instr *alu, UNUSED void *data)
+{
+   if (alu->op != nir_op_f2f16 || nir_src_bit_size(alu->src[0].src) != 32)
+      return false;
+   alu->op = nir_op_f2f16_rtz;
+   return true;
 }
 
 void
@@ -549,6 +563,10 @@ radv_postprocess_nir(const struct radv_compiler_info *compiler_info, const struc
       NIR_PASS(_, stage->nir, nir_opt_intrinsics);
 
    NIR_PASS(_, stage->nir, nir_opt_uub, &(nir_opt_uub_options){0});
+
+   if (compiler_info->ac->is_xclipse &&
+       !nir_is_rounding_mode_rtne(stage->nir->info.float_controls_execution_mode, 16))
+      NIR_PASS(_, stage->nir, nir_shader_alu_pass, radv_xclipse_f2f16_rtz_instr, nir_metadata_control_flow, NULL);
 
    radv_optimize_nir_algebraic(
       stage->nir, io_to_mem || lowered_ngg || stage->stage == MESA_SHADER_COMPUTE || stage->stage == MESA_SHADER_TASK,
