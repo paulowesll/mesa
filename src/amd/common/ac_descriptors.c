@@ -1259,8 +1259,13 @@ ac_set_mutable_ds_surface_fields(const struct radeon_info *info, const struct ac
          if (info->gfx_level >= GFX10) {
             const bool iterate256 = log_num_samples >= 1;
 
-            ds->db_z_info |= S_028040_ITERATE_FLUSH(1);
-            ds->db_stencil_info |= S_028044_ITERATE_FLUSH(!tile_stencil_disable);
+            /* On Xclipse, ITERATE_FLUSH makes texture reads of TC-compatible HTILE depth return
+             * stale or zero values in runs of pixels; the vendor driver leaves it clear.
+             */
+            if (!info->is_xclipse) {
+               ds->db_z_info |= S_028040_ITERATE_FLUSH(1);
+               ds->db_stencil_info |= S_028044_ITERATE_FLUSH(!tile_stencil_disable);
+            }
             ds->db_z_info |= S_028040_ITERATE_256(iterate256);
             ds->db_stencil_info |= S_028044_ITERATE_256(iterate256);
          } else {
