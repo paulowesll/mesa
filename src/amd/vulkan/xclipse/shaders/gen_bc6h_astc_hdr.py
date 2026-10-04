@@ -36,7 +36,7 @@ HEADER = '''/*
  * bc_astc_transcoder.glsl); edit the generator, not this file.
  *
  * BC6H -> ASTC 4x4 HDR for Xclipse, which samples ASTC HDR natively (format
- * 147) but has no BC6H decoder.  One invocation per block:
+ * 147) but has no BC6H decoder.  Each block is encoded by LANES invocations:
  *   1. decode the BC6H block exactly to fp16 (BC6H interpolates in its
  *      unquantised domain and scales by 31/64 (UF) or 31/32 (SF));
  *   2. move the texels into the ASTC HDR LNS domain (the inverse of the
@@ -46,6 +46,9 @@ HEADER = '''/*
  *      the eight shift/delta modes plus the direct 8/8/7 mode, each checked
  *      by decoding it (decoder from Mesa's astc_decoder.glsl);
  *   4. pick 3-bit weights and refit the endpoints by least squares twice.
+ * The 50 candidates of each search are spread over the invocations, and the
+ * winner is the lowest error, ties going to the lowest candidate index: the
+ * result of trying them one after the other, whatever LANES is.
  * Block mode 83 (4x4 grid, weights 0..7), one partition, endpoint range 256.
  * ASTC HDR is unsigned: negative BC6H_SFLOAT texels are clamped to 0.
  *
@@ -56,7 +59,12 @@ HEADER = '''/*
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+/* Invocations per block (1, 4 or 64), so 64 / LANES blocks per workgroup: many for the
+ * latency of small copies, one for the throughput of large ones. */
+layout(constant_id = 0) const uint LANES = 1u;
+const uint CANDS_PER_LANE = (50u + LANES - 1u) / LANES;
 
 layout(push_constant) uniform PushConsts {
     ivec3 offset;
@@ -178,6 +186,10 @@ int best_v[6];
 int best_w[16];
 float best_err;
 
+/* Per invocation: the best of its candidates, packed. */
+shared float s_err[64];
+shared uint s_cand[64], s_v0[64], s_v1[64], s_w0[64], s_w1[64];
+
 float texel_err(ivec3 d0, ivec3 d1, ivec3 l, out int wbest) {
     float best = 3.4e38;
     wbest = 0;
@@ -193,33 +205,73 @@ float texel_err(ivec3 d0, ivec3 d1, ivec3 l, out int wbest) {
 /* decode slot -> final channel: major component first */
 ivec3 to_slots(ivec3 e, int maj) { return maj == 1 ? e.grb : maj == 2 ? e.bgr : e; }
 
-void search(ivec3 E0, ivec3 E1) {
-    for (int ord = 0; ord < 2; ord++) {
+/* Every invocation of the workgroup must call this, also when its block
+ * skips the search (enabled false), because of the barriers. */
+void search(ivec3 E0, ivec3 E1, bool enabled, uint slot, uint sub) {
+    float lerr = uintBitsToFloat(0x7f800000u);
+    uint lcand = 64u, lv0 = 0u, lv1 = 0u, lw0 = 0u, lw1 = 0u;
+    for (uint k = 0u; k < CANDS_PER_LANE && enabled; k++) {
+        uint c = k * LANES + sub;
+        if (c >= 50u)
+            break;
+        int ord = int(c) / 25, cand = int(c) % 25;
         ivec3 P0 = ord == 0 ? E0 : E1, P1 = ord == 0 ? E1 : E0;
-        for (int cand = 0; cand < 25; cand++) {
-            int v[6];
-            if (cand == 24) {
-                v[0] = clamp(rshr(P0.x, 4), 0, 255); v[2] = clamp(rshr(P0.y, 4), 0, 255);
-                v[4] = 0x80 | clamp(rshr(P0.z, 5), 0, 127);
-                v[1] = clamp(rshr(P1.x, 4), 0, 255); v[3] = clamp(rshr(P1.y, 4), 0, 255);
-                v[5] = 0x80 | clamp(rshr(P1.z, 5), 0, 127);
-            } else {
-                int maj = cand / 8, mode = cand % 8;
-                cem11_pack(mode, maj, to_slots(P0, maj), to_slots(P1, maj), v);
-            }
-            ivec3 d0, d1;
-            cem11_decode(v, d0, d1);
-            int w[16];
-            float e = 0.0;
-            for (int i = 0; i < 16; i++)
-                e += texel_err(d0, d1, L[i], w[i]);
-            if (e < best_err) {
-                best_err = e;
-                best_v = v;
-                best_w = w;
-            }
+        int v[6];
+        if (cand == 24) {
+            v[0] = clamp(rshr(P0.x, 4), 0, 255); v[2] = clamp(rshr(P0.y, 4), 0, 255);
+            v[4] = 0x80 | clamp(rshr(P0.z, 5), 0, 127);
+            v[1] = clamp(rshr(P1.x, 4), 0, 255); v[3] = clamp(rshr(P1.y, 4), 0, 255);
+            v[5] = 0x80 | clamp(rshr(P1.z, 5), 0, 127);
+        } else {
+            int maj = cand / 8, mode = cand % 8;
+            cem11_pack(mode, maj, to_slots(P0, maj), to_slots(P1, maj), v);
+        }
+        ivec3 d0, d1;
+        cem11_decode(v, d0, d1);
+        uint w0 = 0u, w1 = 0u;
+        float e = 0.0;
+        for (int i = 0; i < 16; i++) {
+            int wi;
+            e += texel_err(d0, d1, L[i], wi);
+            if (i < 8) w0 |= uint(wi) << (3 * i); else w1 |= uint(wi) << (3 * (i - 8));
+        }
+        if (e < lerr) {
+            lerr = e;
+            lcand = c;
+            lv0 = uint(v[0]) | (uint(v[1]) << 8) | (uint(v[2]) << 16) | (uint(v[3]) << 24);
+            lv1 = uint(v[4]) | (uint(v[5]) << 8);
+            lw0 = w0;
+            lw1 = w1;
         }
     }
+    uint lane = slot * LANES + sub;
+    s_err[lane] = lerr;
+    s_cand[lane] = lcand;
+    s_v0[lane] = lv0;
+    s_v1[lane] = lv1;
+    s_w0[lane] = lw0;
+    s_w1[lane] = lw1;
+    barrier();
+
+    uint win = slot * LANES;
+    for (uint j = 1u; j < LANES; j++) {
+        uint o = slot * LANES + j;
+        if (s_err[o] < s_err[win] || (s_err[o] == s_err[win] && s_cand[o] < s_cand[win]))
+            win = o;
+    }
+    if (enabled && s_err[win] < best_err) {
+        best_err = s_err[win];
+        uint v0 = s_v0[win], v1 = s_v1[win], w0 = s_w0[win], w1 = s_w1[win];
+        for (int i = 0; i < 4; i++)
+            best_v[i] = int((v0 >> (8 * i)) & 0xffu);
+        best_v[4] = int(v1 & 0xffu);
+        best_v[5] = int((v1 >> 8) & 0xffu);
+        for (int i = 0; i < 8; i++) {
+            best_w[i] = int((w0 >> (3 * i)) & 7u);
+            best_w[i + 8] = int((w1 >> (3 * i)) & 7u);
+        }
+    }
+    barrier();
 }
 
 void put_bits(inout uvec4 o, uint pos, uint n, uint v) {
@@ -229,10 +281,14 @@ void put_bits(inout uvec4 o, uint pos, uint n, uint v) {
 }
 
 void main() {
-    uvec3 gid = gl_GlobalInvocationID;
-    if (gid.x * 4u >= pc.width || gid.y * 4u >= pc.height)
-        return;
-    ivec3 block = ivec3(gid) + pc.offset;
+    uint slot = gl_LocalInvocationIndex / LANES, sub = gl_LocalInvocationIndex % LANES;
+    uvec3 bid = uvec3(gl_WorkGroupID.x * (64u / LANES) + slot, gl_WorkGroupID.yz);
+    /* Blocks past the edge still take part in the barriers. */
+    bool inside = bid.x * 4u < pc.width && bid.y * 4u < pc.height;
+    ivec3 block = ivec3(bid) + pc.offset;
+    if (gl_LocalInvocationIndex == 0u)
+        init_p6h();
+    barrier();
     uvec4 w = pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0) : texelFetch(PayloadInput2DArray, block, 0);
     bool is_signed = pc.src_layout == 1u;
 
@@ -279,9 +335,10 @@ void main() {
     ivec3 E1 = clamp(ivec3(round((mean + ax * tmax) / 16.0)), ivec3(0), ivec3(0xfff));
 
     best_err = 3.4e38;
-    search(E0, E1);
+    search(E0, E1, true, slot, sub);
 
     /* least-squares refit of the endpoints for the chosen weights */
+    bool refit = true;
     for (int it = 0; it < 2; it++) {
         float a = 0.0, b2 = 0.0, c2 = 0.0;
         vec3 r0 = vec3(0.0), r1 = vec3(0.0);
@@ -291,11 +348,13 @@ void main() {
             r0 += s0 * vec3(L[i]); r1 += t * vec3(L[i]);
         }
         float det = a * c2 - b2 * b2;
-        if (abs(det) < 1e-6)
-            break;
-        ivec3 N0 = clamp(ivec3(round(((c2 * r0 - b2 * r1) / det) / 16.0)), ivec3(0), ivec3(0xfff));
-        ivec3 N1 = clamp(ivec3(round(((a * r1 - b2 * r0) / det) / 16.0)), ivec3(0), ivec3(0xfff));
-        search(N0, N1);
+        refit = refit && abs(det) >= 1e-6;
+        ivec3 N0 = ivec3(0), N1 = ivec3(0);
+        if (refit) {
+            N0 = clamp(ivec3(round(((c2 * r0 - b2 * r1) / det) / 16.0)), ivec3(0), ivec3(0xfff));
+            N1 = clamp(ivec3(round(((a * r1 - b2 * r0) / det) / 16.0)), ivec3(0), ivec3(0xfff));
+        }
+        search(N0, N1, refit, slot, sub);
     }
 
     uvec4 o = uvec4(0u);
@@ -310,6 +369,8 @@ void main() {
                 o[p >> 5u] |= 1u << (p & 31u);
             }
 
+    if (!inside || sub != 0u)
+        return;
     if (pc.image_type == 2)
         imageStore(OutputImage3D, block, o);
     else
@@ -317,7 +378,18 @@ void main() {
 }
 '''
 
-parts = [grab_line('const uint p6h_packed[129]'), grab_line('uint get_p6h(uint idx)'),
+# The partition table lives in shared memory, written once per workgroup with constant
+# indices: indexed as a constant array, it was rebuilt in scratch on every lookup.
+import re
+P6H = [int(x.rstrip('u')) for x in re.findall(r'\d+u', grab_line('const uint p6h_packed[129]').split('=', 1)[1])]
+assert len(P6H) == 129
+P6H_SHARED = ('shared uint s_p6h[129];\n'
+              'void init_p6h() {\n' +
+              ''.join('    s_p6h[%d] = %du;\n' % (i, v) for i, v in enumerate(P6H)) +
+              '}\n'
+              'uint get_p6h(uint idx) { return (s_p6h[idx >> 2u] >> ((idx & 3u) * 8u)) & 255u; }')
+
+parts = [P6H_SHARED,
          grab_line('uint bc6h_read(uvec4 w, inout uint p, uint c)'),
          grab_line('uint bc6h_read_r(uvec4 w, inout uint p, uint c)'),
          grab_line('int bc6h_extend_sign(int val, uint bits)'),

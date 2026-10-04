@@ -55,20 +55,26 @@ enum radv_xclipse_bc_path {
    RADV_XCLIPSE_BC_BC5_TO_ASTC,
    RADV_XCLIPSE_BC_BC7_TO_ASTC,
    RADV_XCLIPSE_BC_BC6H_TO_ASTC,
+   RADV_XCLIPSE_BC_BC6H_TO_ASTC_4,
+   RADV_XCLIPSE_BC_BC6H_TO_ASTC_64,
    RADV_XCLIPSE_BC_NUM_PATHS,
 };
 
 static const struct {
    const uint32_t *code;
    size_t code_size;
-   /* PIPELINE_MODE of bc_astc_transcoder.glsl: the encoder (2 = BC7, 3 = two-plane BC5). */
+   /* Specialisation constant 0: PIPELINE_MODE of bc_astc_transcoder.glsl, the encoder
+    * (2 = BC7, 3 = two-plane BC5); LANES of bc6h_astc_hdr.glsl, invocations per block.
+    */
    uint32_t mode;
 } radv_xclipse_bc_shaders[RADV_XCLIPSE_BC_NUM_PATHS] = {
    [RADV_XCLIPSE_BC_DECODE] = {bc_decoder_spv, sizeof(bc_decoder_spv), 0},
    [RADV_XCLIPSE_BC_BC4_TO_BC3] = {bc4_bc3_spv, sizeof(bc4_bc3_spv), 0},
    [RADV_XCLIPSE_BC_BC5_TO_ASTC] = {bc_astc_spv, sizeof(bc_astc_spv), 3},
    [RADV_XCLIPSE_BC_BC7_TO_ASTC] = {bc_astc_quality_spv, sizeof(bc_astc_quality_spv), 2},
-   [RADV_XCLIPSE_BC_BC6H_TO_ASTC] = {bc6h_astc_hdr_spv, sizeof(bc6h_astc_hdr_spv), 0},
+   [RADV_XCLIPSE_BC_BC6H_TO_ASTC] = {bc6h_astc_hdr_spv, sizeof(bc6h_astc_hdr_spv), 1},
+   [RADV_XCLIPSE_BC_BC6H_TO_ASTC_4] = {bc6h_astc_hdr_spv, sizeof(bc6h_astc_hdr_spv), 4},
+   [RADV_XCLIPSE_BC_BC6H_TO_ASTC_64] = {bc6h_astc_hdr_spv, sizeof(bc6h_astc_hdr_spv), 64},
 };
 
 /* bc_decoder.glsl: kind of block to decode. */
@@ -399,6 +405,46 @@ radv_xclipse_bc_transcode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_
                            extent->depth);
 }
 
+/* The BC6H encoder tries 50 candidates three times per block.  Spread over several
+ * invocations per block, a small copy takes a third of the time; one invocation per block
+ * gives the best throughput on large ones.  Every copy waits for the previous transcodes, and
+ * a game uploading thousands of small mips in one submission otherwise ran into the kernel's
+ * job timeout.
+ */
+static void
+radv_xclipse_bc6h_transcode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_view *src,
+                            struct radv_image_view *dst, VkFormat format, const VkOffset3D *offset,
+                            const VkExtent3D *extent)
+{
+   struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
+   const uint32_t blocks_x = DIV_ROUND_UP(extent->width, 4), blocks_y = DIV_ROUND_UP(extent->height, 4);
+   const uint64_t blocks = (uint64_t)blocks_x * blocks_y * extent->depth;
+   const enum radv_xclipse_bc_path path = blocks <= 128    ? RADV_XCLIPSE_BC_BC6H_TO_ASTC_64
+                                          : blocks <= 2048 ? RADV_XCLIPSE_BC_BC6H_TO_ASTC_4
+                                                           : RADV_XCLIPSE_BC_BC6H_TO_ASTC;
+   const uint32_t blocks_per_group = 64 / radv_xclipse_bc_shaders[path].mode;
+   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, path);
+
+   if (pipeline == VK_NULL_HANDLE)
+      return;
+
+   radv_xclipse_bc_bind_views(cmd_buffer, bc->transcode_layout, src, dst);
+   radv_meta_bind_compute_pipeline(cmd_buffer, pipeline);
+
+   const uint32_t push_constants[7] = {
+      offset->x / 4, offset->y / 4,
+      offset->z,     extent->width,
+      extent->height, radv_xclipse_bc_src_layout(format),
+      src->image->vk.image_type,
+   };
+   radv_meta_push_constants(cmd_buffer, bc->transcode_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
+                            push_constants);
+
+   /* Whole 64-invocation workgroups of blocks_per_group blocks along x. */
+   radv_unaligned_dispatch(cmd_buffer, DIV_ROUND_UP(blocks_x, blocks_per_group) * 64, blocks_y, extent->depth);
+}
+
 static void
 radv_xclipse_bc_init_view(struct radv_device *device, struct radv_image_view *iview, struct radv_image *image,
                           const VkImageSubresourceLayers *subresource, VkImageAspectFlags aspect, VkFormat format,
@@ -464,6 +510,8 @@ radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image
 
    if (path == RADV_XCLIPSE_BC_DECODE)
       radv_xclipse_bc_decode(cmd_buffer, &src_iview, &dst_iview, format, &region_offset, &region_extent);
+   else if (path == RADV_XCLIPSE_BC_BC6H_TO_ASTC)
+      radv_xclipse_bc6h_transcode(cmd_buffer, &src_iview, &dst_iview, format, &region_offset, &region_extent);
    else
       radv_xclipse_bc_transcode(cmd_buffer, &src_iview, &dst_iview, format, path, &region_offset, &region_extent);
 
