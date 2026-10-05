@@ -323,10 +323,43 @@ radv_bc_emulation_swizzle(VkFormat format, VkComponentMapping *swizzle)
    }
 }
 
+/* Format of the hidden plane emulated ETC2/EAC images decode into.  Xclipse samples R16_UNORM,
+ * R16_SNORM and their two-channel forms with nearest filtering (they are not filterable there,
+ * nor on the vendor driver), so the EAC formats decode to half floats instead, which it filters;
+ * an 11-bit EAC value keeps its precision in a half.
+ */
+VkFormat
+radv_etc2_emulation_format(const struct radv_physical_device *pdev, VkFormat format)
+{
+   const VkFormat emulation_format = vk_texcompress_etc2_emulation_format(format);
+
+   if (pdev->info.is_xclipse) {
+      switch (emulation_format) {
+      case VK_FORMAT_R16_UNORM:
+      case VK_FORMAT_R16_SNORM:
+         return VK_FORMAT_R16_SFLOAT;
+      case VK_FORMAT_R16G16_UNORM:
+      case VK_FORMAT_R16G16_SNORM:
+         return VK_FORMAT_R16G16_SFLOAT;
+      default:
+         break;
+      }
+   }
+   return emulation_format;
+}
+
+/* The storage view the ETC2/EAC decoder writes the hidden plane through. */
+VkFormat
+radv_etc2_store_format(const struct radv_physical_device *pdev, VkFormat format)
+{
+   const VkFormat emulation_format = radv_etc2_emulation_format(pdev, format);
+   return emulation_format == VK_FORMAT_R8G8B8A8_SRGB ? VK_FORMAT_R8G8B8A8_UNORM : emulation_format;
+}
+
 bool
 radv_is_format_emulated(const struct radv_physical_device *pdev, VkFormat format)
 {
-   if (pdev->emulate_etc2 && vk_texcompress_etc2_emulation_format(format) != VK_FORMAT_UNDEFINED)
+   if (pdev->emulate_etc2 && radv_etc2_emulation_format(pdev, format) != VK_FORMAT_UNDEFINED)
       return true;
 
    if (pdev->emulate_astc && vk_texcompress_astc_emulation_format(format) != VK_FORMAT_UNDEFINED)
@@ -361,7 +394,7 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
                  VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT |
                  VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;
 
-         VkFormat emulation_format = vk_texcompress_etc2_emulation_format(format);
+         VkFormat emulation_format = radv_etc2_emulation_format(pdev, format);
          if (emulation_format == VK_FORMAT_UNDEFINED)
             emulation_format = vk_texcompress_astc_emulation_format(format);
          if (emulation_format == VK_FORMAT_UNDEFINED)

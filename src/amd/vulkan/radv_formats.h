@@ -155,6 +155,10 @@ bool radv_is_format_emulated(const struct radv_physical_device *pdev, VkFormat f
 
 VkFormat radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat format);
 
+VkFormat radv_etc2_emulation_format(const struct radv_physical_device *pdev, VkFormat format);
+
+VkFormat radv_etc2_store_format(const struct radv_physical_device *pdev, VkFormat format);
+
 bool radv_bc_emulation_swizzle(VkFormat format, VkComponentMapping *swizzle);
 
 bool radv_format_pack_clear_color(VkFormat format, uint32_t clear_vals[2], VkClearColorValue *value);

@@ -578,7 +578,7 @@ radv_image_get_plane_format(const struct radv_physical_device *pdev, const struc
       case UTIL_FORMAT_LAYOUT_BPTC:
          return radv_bc_emulation_format(pdev, image->vk.format);
       default:
-         return vk_texcompress_etc2_emulation_format(image->vk.format);
+         return radv_etc2_emulation_format(pdev, image->vk.format);
       }
    }
 

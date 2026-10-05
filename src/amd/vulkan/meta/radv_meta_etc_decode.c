@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdbool.h>
 
+#include "radv_formats.h"
 #include "radv_meta.h"
 
 static VkPipeline
@@ -105,7 +106,7 @@ radv_meta_decode_etc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *imag
       },
       NULL);
 
-   VkFormat store_format = vk_texcompress_etc2_store_format(image->vk.format);
+   VkFormat store_format = radv_etc2_store_format(radv_device_physical(device), image->vk.format);
 
    const VkImageViewUsage2CreateInfoKHR dst_iview_usage_info = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_2_CREATE_INFO_KHR,
@@ -161,7 +162,7 @@ radv_meta_decode_etc_indirect(struct radv_cmd_buffer *cmd_buffer,
       const VkImageSubresourceLayers *imageSubresource = &pCopyMemoryToImageIndirectInfo->pImageSubresources[i];
 
       VkFormat load_format = vk_texcompress_etc2_load_format(image->vk.format);
-      VkFormat store_format = vk_texcompress_etc2_store_format(image->vk.format);
+      VkFormat store_format = radv_etc2_store_format(radv_device_physical(device), image->vk.format);
 
       const VkImageViewUsage2CreateInfoKHR src_iview_usage_info = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_2_CREATE_INFO_KHR,
