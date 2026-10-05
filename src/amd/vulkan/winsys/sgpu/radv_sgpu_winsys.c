@@ -176,6 +176,7 @@ radv_sgpu_winsys_destroy(struct radeon_winsys *_ws)
 {
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
 
+   radv_sgpu_ib_pool_finish(ws);
    if (ws->null_prt_bo)
       ws->base.buffer_destroy(&ws->base, ws->null_prt_bo);
    radv_sgpu_release_prt_wa_range(ws);

@@ -45,6 +45,11 @@ struct radv_sgpu_winsys {
    /* Zero BO behind the low alias of sparse buffers, created on first use. */
    simple_mtx_t null_prt_lock;
    struct radeon_winsys_bo *null_prt_bo;
+
+   /* Command stream BOs given back by command buffers, reused once idle (ws->lock). */
+   struct radeon_winsys_bo *ib_pool[16];
+   unsigned ib_pool_count;
+   uint64_t ib_pool_bytes;
 };
 
 struct radv_sgpu_bo {
@@ -94,6 +99,7 @@ radv_sgpu_bo(struct radeon_winsys_bo *base)
 
 void radv_sgpu_bo_init_functions(struct radv_sgpu_winsys *ws);
 void radv_sgpu_cs_init_functions(struct radv_sgpu_winsys *ws);
+void radv_sgpu_ib_pool_finish(struct radv_sgpu_winsys *ws);
 
 /* Physical release of a BO whose submissions retired; ws->lock held. */
 void radv_sgpu_bo_release_destroyed_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo);

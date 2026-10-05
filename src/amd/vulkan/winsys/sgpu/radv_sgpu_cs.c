@@ -68,11 +68,66 @@ radv_sgpu_cs(struct ac_cmdbuf *base)
    return (struct radv_sgpu_cs *)base;
 }
 
+/* A command buffer is usually recorded again while its previous stream is still in flight, so
+ * that BO goes back to a pool shared by the winsys instead of being destroyed: creating, mapping
+ * and freeing a BO costs several ioctls, each expensive on this kernel.
+ */
+#define SGPU_IB_POOL_MAX_BYTES (32ull << 20)
+
+static void
+radv_sgpu_ib_pool_put(struct radv_sgpu_winsys *ws, struct radeon_winsys_bo *bo)
+{
+   simple_mtx_lock(&ws->lock);
+   if (ws->ib_pool_count < ARRAY_SIZE(ws->ib_pool) && ws->ib_pool_bytes + bo->size <= SGPU_IB_POOL_MAX_BYTES) {
+      ws->ib_pool[ws->ib_pool_count++] = bo;
+      ws->ib_pool_bytes += bo->size;
+      bo = NULL;
+   }
+   simple_mtx_unlock(&ws->lock);
+
+   if (bo)
+      ws->base.buffer_destroy(&ws->base, bo);
+}
+
+/* The smallest idle pooled BO of at least that size. */
+static struct radeon_winsys_bo *
+radv_sgpu_ib_pool_get(struct radv_sgpu_winsys *ws, uint64_t bytes)
+{
+   struct radeon_winsys_bo *bo = NULL;
+   unsigned best = 0;
+
+   simple_mtx_lock(&ws->lock);
+   for (unsigned i = 0; i < ws->ib_pool_count; i++) {
+      struct radeon_winsys_bo *candidate = ws->ib_pool[i];
+      if (radv_sgpu_bo(candidate)->pending_submits || candidate->size < bytes)
+         continue;
+      if (!bo || candidate->size < bo->size) {
+         bo = candidate;
+         best = i;
+      }
+   }
+   if (bo) {
+      ws->ib_pool[best] = ws->ib_pool[--ws->ib_pool_count];
+      ws->ib_pool_bytes -= bo->size;
+   }
+   simple_mtx_unlock(&ws->lock);
+   return bo;
+}
+
+void
+radv_sgpu_ib_pool_finish(struct radv_sgpu_winsys *ws)
+{
+   for (unsigned i = 0; i < ws->ib_pool_count; i++)
+      ws->base.buffer_destroy(&ws->base, ws->ib_pool[i]);
+   ws->ib_pool_count = 0;
+   ws->ib_pool_bytes = 0;
+}
+
 static void
 radv_sgpu_cs_drop_spare(struct radv_sgpu_cs *cs)
 {
    if (cs->spare_bo)
-      cs->ws->base.buffer_destroy(&cs->ws->base, cs->spare_bo);
+      radv_sgpu_ib_pool_put(cs->ws, cs->spare_bo);
    cs->spare_bo = NULL;
 }
 
@@ -301,6 +356,9 @@ radv_sgpu_cs_finalize(struct ac_cmdbuf *base)
          radv_sgpu_cs_drop_spare(cs);
       }
    }
+
+   if (!bo)
+      bo = radv_sgpu_ib_pool_get(ws, bytes);
 
    if (!bo) {
       /* Round up so a command buffer that grows a little keeps its BO. */
