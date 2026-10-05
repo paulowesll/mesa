@@ -24,10 +24,17 @@ radv_sgpu_query_value(struct radeon_winsys *_ws, enum radeon_value_id value)
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
    uint64_t result = 0;
 
-   if (value == RADEON_ALLOCATED_GTT) {
+   switch (value) {
+   case RADEON_ALLOCATED_GTT:
       simple_mtx_lock(&ws->lock);
       result = ws->allocated_gtt;
       simple_mtx_unlock(&ws->lock);
+      break;
+   case RADEON_TIMESTAMP:
+      amdgpu_query_info(ws->device, AMDGPU_INFO_TIMESTAMP, sizeof(result), &result);
+      break;
+   default:
+      break;
    }
    return result;
 }
