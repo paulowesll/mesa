@@ -511,8 +511,11 @@ struct radv_sgpu_ctx {
    /* Set once the kernel cancelled a job of this context (GPU hang). */
    uint32_t lost[SGPU_NUM_IPS][SGPU_MAX_RINGS];
 
-   /* In-flight submissions and the BOs they keep alive (ws->lock). */
+   /* In-flight submissions and the BOs they keep alive, oldest first (ws->lock). */
    struct radv_sgpu_retention *retentions;
+   struct radv_sgpu_retention **retentions_tail;
+   /* Highest sequence number known to have completed on each route (ws->lock). */
+   uint64_t completed_seq[SGPU_NUM_IPS][SGPU_MAX_RINGS];
 };
 
 static bool
@@ -568,22 +571,41 @@ radv_sgpu_retention_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu
    free(r);
 }
 
-/* A cancelled job's fence has signalled with an error: it no longer runs, so its BOs are
- * released like those of a completed one.
+/* Jobs of one route complete in submission order, so each route is walked oldest first and
+ * stops at its first pending job: querying every in-flight fence before each submission cost
+ * an ioctl apiece, expensive on this kernel.  A cancelled job's fence has signalled with an
+ * error: it no longer runs, so its BOs are released like those of a completed one.
  */
 static void
 radv_sgpu_retire(struct radv_sgpu_ctx *ctx)
 {
    struct radv_sgpu_winsys *ws = ctx->ws;
+   bool pending[SGPU_NUM_IPS][SGPU_MAX_RINGS] = {0};
 
    simple_mtx_lock(&ws->lock);
    for (struct radv_sgpu_retention **link = &ctx->retentions; *link;) {
       struct radv_sgpu_retention *r = *link;
-      uint32_t expired = 0;
-      const int ret = radv_sgpu_query_fence(ctx, &r->fence, 0, &expired);
+      const unsigned ip = r->fence.ip_type, ring = r->fence.ring;
+      bool done = r->fence.fence <= ctx->completed_seq[ip][ring];
 
-      if ((!ret && expired) || ret == -ECANCELED) {
+      if (!done && !pending[ip][ring]) {
+         uint32_t expired = 0;
+         const int ret = radv_sgpu_query_fence(ctx, &r->fence, 0, &expired);
+
+         if (!ret && expired) {
+            ctx->completed_seq[ip][ring] = r->fence.fence;
+            done = true;
+         } else if (ret == -ECANCELED) {
+            done = true;
+         } else {
+            pending[ip][ring] = true;
+         }
+      }
+
+      if (done) {
          *link = r->next;
+         if (!*link)
+            ctx->retentions_tail = link;
          radv_sgpu_retention_release_locked(ws, r);
       } else {
          link = &r->next;
@@ -1118,8 +1140,9 @@ radv_sgpu_cs_submit(struct radeon_winsys_ctx *_ctx, const struct radv_winsys_sub
    ctx->queue_syncobj_wait[ip][ring] = false;
 
    simple_mtx_lock(&ws->lock);
-   retention->next = ctx->retentions;
-   ctx->retentions = retention;
+   retention->next = NULL;
+   *ctx->retentions_tail = retention;
+   ctx->retentions_tail = &retention->next;
    simple_mtx_unlock(&ws->lock);
 
    simple_mtx_unlock(&ctx->lock);
@@ -1156,6 +1179,7 @@ radv_sgpu_ctx_create(struct radeon_winsys *_ws, enum radeon_ctx_priority priorit
    }
 
    ctx->ws = ws;
+   ctx->retentions_tail = &ctx->retentions;
    simple_mtx_init(&ctx->lock, mtx_plain);
    *out = (struct radeon_winsys_ctx *)ctx;
    return VK_SUCCESS;
@@ -1217,6 +1241,10 @@ radv_sgpu_ctx_wait_idle(struct radeon_winsys_ctx *_ctx, enum amd_ip_type ip, int
       uint32_t expired = 0;
       if (radv_sgpu_query_fence(ctx, &fence, 1000000000ull, &expired) || !expired)
          return false;
+
+      simple_mtx_lock(&ctx->ws->lock);
+      ctx->completed_seq[ip][ring] = MAX2(ctx->completed_seq[ip][ring], fence.fence);
+      simple_mtx_unlock(&ctx->ws->lock);
    }
 
    radv_sgpu_retire(ctx);
