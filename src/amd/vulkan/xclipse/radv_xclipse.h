@@ -16,6 +16,7 @@
 #ifndef RADV_XCLIPSE_H
 #define RADV_XCLIPSE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
 
@@ -44,5 +45,15 @@ uint64_t radv_xclipse_available_memory(void);
 
 /* Adds the register state a graphics preamble starts with. */
 void radv_xclipse_add_native_state(struct ac_pm4_state *pm4);
+
+/* Brackets a shader compilation (begin true, then false) with the vendor kernel's CPU hint. */
+#if RADV_XCLIPSE
+void radv_xclipse_compile_hint(struct radv_device *device, bool begin);
+#else
+static inline void
+radv_xclipse_compile_hint(struct radv_device *device, bool begin)
+{
+}
+#endif
 
 #endif /* RADV_XCLIPSE_H */

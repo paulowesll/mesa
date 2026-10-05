@@ -15,6 +15,7 @@
 
 #include <amdgpu.h>
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <xf86drm.h>
@@ -24,10 +25,13 @@
 #include "util/macros.h"
 #include "util/os_time.h"
 #include "util/u_atomic.h"
+#include "util/simple_mtx.h"
 #include "util/u_math.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
 #include "winsys/sgpu/radv_sgpu_winsys_public.h"
 #include "ac_gpu_info.h"
+#include "radv_device.h"
+#include "radv_physical_device.h"
 #include "radv_radeon_winsys.h"
 #include "vk_drm_syncobj.h"
 #include "vk_extensions.h"
@@ -319,4 +323,44 @@ radv_xclipse_fixup_features(struct vk_features *features)
 
    /* Unmapped sparse texels are reported resident; the vendor driver does not expose it either. */
    features->shaderResourceResidency = false;
+}
+
+/* Samsung's kernel driver takes a hint while shaders are compiled: it raises the minimum
+ * frequency of the big CPU cluster and favours the calling task until the hint is cleared.
+ * The vendor driver brackets every pipeline compilation with it.  Several threads may compile
+ * at once, so the first one sets the hint and the last one clears it.
+ */
+struct radv_xclipse_driver_control {
+   uint32_t op;
+   uint32_t reserved;
+   uint64_t in_data;
+   uint64_t out_data;
+};
+
+#define RADV_XCLIPSE_IOCTL_DRIVER_CONTROL                                                          \
+   _IOW(DRM_IOCTL_BASE, DRM_COMMAND_BASE + 0x5b, struct radv_xclipse_driver_control)
+#define RADV_XCLIPSE_DRIVER_CONTROL_SHADER_HINT 1
+#define RADV_XCLIPSE_SHADER_HINT_BIG_CPU_UNBIND 0
+#define RADV_XCLIPSE_SHADER_HINT_BIG_CPU_BIND   1
+
+static simple_mtx_t radv_xclipse_compile_hint_lock = SIMPLE_MTX_INITIALIZER;
+static unsigned radv_xclipse_compile_hint_users;
+
+void
+radv_xclipse_compile_hint(struct radv_device *device, bool begin)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   if (!pdev->info.is_xclipse)
+      return;
+
+   simple_mtx_lock(&radv_xclipse_compile_hint_lock);
+   if (begin ? radv_xclipse_compile_hint_users++ == 0 : --radv_xclipse_compile_hint_users == 0) {
+      struct radv_xclipse_driver_control control = {
+         .op = RADV_XCLIPSE_DRIVER_CONTROL_SHADER_HINT,
+         .in_data = begin ? RADV_XCLIPSE_SHADER_HINT_BIG_CPU_BIND : RADV_XCLIPSE_SHADER_HINT_BIG_CPU_UNBIND,
+      };
+      drmIoctl(device->ws->get_fd(device->ws), RADV_XCLIPSE_IOCTL_DRIVER_CONTROL, &control);
+   }
+   simple_mtx_unlock(&radv_xclipse_compile_hint_lock);
 }

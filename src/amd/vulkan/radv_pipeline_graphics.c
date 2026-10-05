@@ -15,6 +15,7 @@
 #include "nir/nir_xfb_info.h"
 #include "nir/radv_nir.h"
 #include "tools/radv_rmv.h"
+#include "xclipse/radv_xclipse.h"
 #include "util/mesa-blake3.h"
 #include "util/os_time.h"
 #include "util/u_atomic.h"
@@ -3065,10 +3066,12 @@ radv_graphics_pipeline_compile(struct radv_graphics_pipeline *pipeline, const Vk
 
    struct radv_shader_debug_info debug[MESA_VULKAN_SHADER_STAGES] = {0};
    struct radv_shader_debug_info gs_copy_debug = {0};
+   radv_xclipse_compile_hint(device, true);
    radv_graphics_shaders_compile(compiler_info, cache, stages, &gfx_state->key.gfx_state, pipeline->base.is_internal,
                                  retained_shaders, noop_fs, debug, binaries, &gs_copy_debug, &gs_copy_binary);
    radv_graphics_shaders_create(device, cache, skip_shaders_cache, pipeline->base.shaders, binaries, debug,
                                 &pipeline->base.gs_copy_shader, gs_copy_binary, &gs_copy_debug);
+   radv_xclipse_compile_hint(device, false);
 
    if (!skip_shaders_cache) {
       radv_pipeline_cache_insert(device, cache, &pipeline->base);

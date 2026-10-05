@@ -12,6 +12,7 @@
 #include "nir/nir.h"
 #include "nir/radv_nir.h"
 #include "tools/radv_rmv.h"
+#include "xclipse/radv_xclipse.h"
 #include "util/mesa-blake3.h"
 #include "util/os_time.h"
 #include "util/u_atomic.h"
@@ -207,10 +208,12 @@ radv_compute_pipeline_compile(const VkComputePipelineCreateInfo *pCreateInfo, st
    radv_pipeline_stage_init(pipeline->base.create_flags, pStage, pipeline_layout, &stage_key, &cs_stage);
 
    struct radv_shader_debug_info cs_dbg = {0};
+   radv_xclipse_compile_hint(device, true);
    struct radv_shader_binary *cs_binary =
       radv_compile_cs(compiler_info, &cs_stage, pipeline->base.is_internal, &cs_dbg);
    pipeline->base.shaders[MESA_SHADER_COMPUTE] =
       radv_shader_create(device, cache, cs_binary, skip_shaders_cache, &cs_dbg);
+   radv_xclipse_compile_hint(device, false);
 
    cs_stage.feedback.duration += os_time_get_nano() - stage_start;
 
