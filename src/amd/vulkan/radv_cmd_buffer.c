@@ -9220,11 +9220,21 @@ radv_bind_fragment_output_state(struct radv_cmd_buffer *cmd_buffer, const struct
       cb_shader_mask = 0xf;
    }
 
+   const bool null_export_workaround = radv_needs_null_export_workaround(device, ps, custom_blend_mode);
    const bool rbplus_depth_only_enabled =
       radv_can_enable_rbplus_depth_only(cmd_buffer, ps, col_format, custom_blend_mode);
 
-   if ((radv_needs_null_export_workaround(device, ps, custom_blend_mode) && !col_format) || rbplus_depth_only_enabled)
+   if ((null_export_workaround && !col_format) || rbplus_depth_only_enabled)
       col_format = V_028714_SPI_SHADER_32_R;
+
+   /* Xclipse: the null export still reaches the CB, so CB_SHADER_MASK has to describe it.
+    * The Samsung driver programs OUTPUT0_ENABLE for a depth-only pass whose FS only kills
+    * pixels (CB_TARGET_MASK 0, SPI_SHADER_COL_FORMAT 32_R, CB_SHADER_MASK 1). With the mask
+    * left at 0 the export is never accounted for and the following CACHE_FLUSH_AND_INV_TS
+    * never retires.
+    */
+   if (pdev->info.is_xclipse && col_format && !cb_shader_mask)
+      cb_shader_mask = ac_get_cb_shader_mask(col_format);
 
    if (cmd_buffer->state.spi_shader_col_format != col_format) {
       cmd_buffer->state.spi_shader_col_format = col_format;
