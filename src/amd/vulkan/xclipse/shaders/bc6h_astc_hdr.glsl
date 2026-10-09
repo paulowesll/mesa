@@ -49,7 +49,7 @@ layout(set = 0, binding = 0) writeonly uniform uimage3D OutputImage3D;
 layout(set = 0, binding = 1) uniform utexture2DArray PayloadInput2DArray;
 layout(set = 0, binding = 1) uniform utexture3D PayloadInput3D;
 
-shared uint s_p6h[129];
+shared uint s_p6h[128];
 void init_p6h() {
     s_p6h[0] = 16842880u;
     s_p6h[1] = 16842752u;
@@ -114,72 +114,71 @@ void init_p6h() {
     s_p6h[60] = 128u;
     s_p6h[61] = 0u;
     s_p6h[62] = 0u;
-    s_p6h[63] = 16843008u;
-    s_p6h[64] = 32897u;
-    s_p6h[65] = 256u;
-    s_p6h[66] = 16843008u;
-    s_p6h[67] = 16843008u;
-    s_p6h[68] = 2164359297u;
-    s_p6h[69] = 1u;
-    s_p6h[70] = 1u;
+    s_p6h[63] = 2164326657u;
+    s_p6h[64] = 128u;
+    s_p6h[65] = 1u;
+    s_p6h[66] = 65793u;
+    s_p6h[67] = 2164326657u;
+    s_p6h[68] = 25231744u;
+    s_p6h[69] = 16777216u;
+    s_p6h[70] = 0u;
     s_p6h[71] = 0u;
-    s_p6h[72] = 32768u;
+    s_p6h[72] = 128u;
     s_p6h[73] = 0u;
-    s_p6h[74] = 33024u;
-    s_p6h[75] = 16843008u;
-    s_p6h[76] = 2164359168u;
-    s_p6h[77] = 16777217u;
-    s_p6h[78] = 1u;
-    s_p6h[79] = 1u;
-    s_p6h[80] = 2164293632u;
-    s_p6h[81] = 1u;
-    s_p6h[82] = 1u;
+    s_p6h[74] = 129u;
+    s_p6h[75] = 65793u;
+    s_p6h[76] = 25231744u;
+    s_p6h[77] = 16842752u;
+    s_p6h[78] = 16777216u;
+    s_p6h[79] = 0u;
+    s_p6h[80] = 25231488u;
+    s_p6h[81] = 16777216u;
+    s_p6h[82] = 0u;
     s_p6h[83] = 0u;
-    s_p6h[84] = 32768u;
-    s_p6h[85] = 256u;
-    s_p6h[86] = 98560u;
-    s_p6h[87] = 16843008u;
-    s_p6h[88] = 32768u;
+    s_p6h[84] = 128u;
+    s_p6h[85] = 1u;
+    s_p6h[86] = 385u;
+    s_p6h[87] = 65793u;
+    s_p6h[88] = 128u;
     s_p6h[89] = 0u;
-    s_p6h[90] = 33024u;
-    s_p6h[91] = 65792u;
-    s_p6h[92] = 16875520u;
-    s_p6h[93] = 16777217u;
-    s_p6h[94] = 16777217u;
-    s_p6h[95] = 1u;
-    s_p6h[96] = 2164293761u;
-    s_p6h[97] = 1u;
-    s_p6h[98] = 1u;
-    s_p6h[99] = 1u;
-    s_p6h[100] = 32768u;
-    s_p6h[101] = 256u;
-    s_p6h[102] = 33024u;
-    s_p6h[103] = 65792u;
-    s_p6h[104] = 2164359168u;
-    s_p6h[105] = 16842752u;
-    s_p6h[106] = 16842752u;
-    s_p6h[107] = 16842752u;
-    s_p6h[108] = 2164293632u;
-    s_p6h[109] = 16842753u;
-    s_p6h[110] = 16842752u;
-    s_p6h[111] = 65792u;
-    s_p6h[112] = 32768u;
-    s_p6h[113] = 16842753u;
-    s_p6h[114] = 16875777u;
-    s_p6h[115] = 256u;
-    s_p6h[116] = 32768u;
-    s_p6h[117] = 16843008u;
-    s_p6h[118] = 16875777u;
-    s_p6h[119] = 1u;
-    s_p6h[120] = 2164359168u;
-    s_p6h[121] = 1u;
-    s_p6h[122] = 257u;
-    s_p6h[123] = 16843008u;
-    s_p6h[124] = 2164293632u;
-    s_p6h[125] = 257u;
-    s_p6h[126] = 257u;
-    s_p6h[127] = 65793u;
-    s_p6h[128] = 0u;
+    s_p6h[90] = 129u;
+    s_p6h[91] = 257u;
+    s_p6h[92] = 16843136u;
+    s_p6h[93] = 16842752u;
+    s_p6h[94] = 16842752u;
+    s_p6h[95] = 2164260864u;
+    s_p6h[96] = 25231488u;
+    s_p6h[97] = 16777216u;
+    s_p6h[98] = 16777216u;
+    s_p6h[99] = 0u;
+    s_p6h[100] = 128u;
+    s_p6h[101] = 1u;
+    s_p6h[102] = 129u;
+    s_p6h[103] = 257u;
+    s_p6h[104] = 8454528u;
+    s_p6h[105] = 65792u;
+    s_p6h[106] = 65792u;
+    s_p6h[107] = 65792u;
+    s_p6h[108] = 25231488u;
+    s_p6h[109] = 65792u;
+    s_p6h[110] = 65792u;
+    s_p6h[111] = 257u;
+    s_p6h[112] = 16777344u;
+    s_p6h[113] = 16843008u;
+    s_p6h[114] = 65921u;
+    s_p6h[115] = 1u;
+    s_p6h[116] = 128u;
+    s_p6h[117] = 16843009u;
+    s_p6h[118] = 16843137u;
+    s_p6h[119] = 0u;
+    s_p6h[120] = 25231744u;
+    s_p6h[121] = 16777216u;
+    s_p6h[122] = 1u;
+    s_p6h[123] = 65793u;
+    s_p6h[124] = 25231488u;
+    s_p6h[125] = 16777217u;
+    s_p6h[126] = 16777217u;
+    s_p6h[127] = 257u;
 }
 uint get_p6h(uint idx) { return (s_p6h[idx >> 2u] >> ((idx & 3u) * 8u)) & 255u; }
 uint bc6h_read(uvec4 w, inout uint p, uint c) { if (c == 0u) return 0u; uint idx = p >> 5u, bit = p & 31u, word0 = idx == 0u ? w.x : idx == 1u ? w.y : idx == 2u ? w.z : w.w, v; if (bit + c <= 32u) v = (word0 >> bit) & ((1u << c) - 1u); else { uint word1 = idx == 0u ? w.y : idx == 1u ? w.z : idx == 2u ? w.w : 0u; v = (word0 >> bit) | ((word1 & ((1u << (bit + c - 32u)) - 1u)) << (32u - bit)); } p += c; return v; }
@@ -204,8 +203,8 @@ BC6HState parse_bc6h(uvec4 w, bool isSigned) {
     else if (mode == 0x06u) { st.r[0]|=int(bc6h_read(w,p,10u)); st.g[0]|=int(bc6h_read(w,p,10u)); st.b[0]|=int(bc6h_read(w,p,10u)); st.r[1]|=int(bc6h_read(w,p,4u)); st.r[0]|=int(bc6h_read(w,p,1u))<<10; st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,5u)); st.g[0]|=int(bc6h_read(w,p,1u))<<10; st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,4u)); st.b[0]|=int(bc6h_read(w,p,1u))<<10; st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,4u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.r[3]|=int(bc6h_read(w,p,4u)); st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.partition_index=bc6h_read(w,p,5u); st.m_idx=3u; }
     else if (mode == 0x0Au) { st.r[0]|=int(bc6h_read(w,p,10u)); st.g[0]|=int(bc6h_read(w,p,10u)); st.b[0]|=int(bc6h_read(w,p,10u)); st.r[1]|=int(bc6h_read(w,p,4u)); st.r[0]|=int(bc6h_read(w,p,1u))<<10; st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,4u)); st.g[0]|=int(bc6h_read(w,p,1u))<<10; st.b[3]|=int(bc6h_read(w,p,1u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,5u)); st.b[0]|=int(bc6h_read(w,p,1u))<<10; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,4u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.r[3]|=int(bc6h_read(w,p,4u)); st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.partition_index=bc6h_read(w,p,5u); st.m_idx=4u; }
     else if (mode == 0x0Eu) { st.r[0]|=int(bc6h_read(w,p,9u)); st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,9u)); st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,9u)); st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,5u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.r[3]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.partition_index=bc6h_read(w,p,5u); st.m_idx=5u; }
-    else if (mode == 0x12u) { st.r[0]|=int(bc6h_read(w,p,8u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,6u)); st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,4u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,6u)); st.r[3]|=int(bc6h_read(w,p,6u)); st.partition_index=bc6h_read(w,p,5u); st.m_idx=6u; }
-    else if (mode == 0x16u) { st.r[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,8u)); st.g[2]|=int(bc6h_read(w,p,1u))<<5; st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,8u)); st.g[3]|=int(bc6h_read(w,p,1u))<<5; st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,5u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,6u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,4u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.r[3]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.partition_index=bc6h_read(w,p,5u); st.m_idx=7u; }
+    else if (mode == 0x12u) { st.r[0]|=int(bc6h_read(w,p,8u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,6u)); st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,6u)); st.r[3]|=int(bc6h_read(w,p,6u)); st.partition_index=bc6h_read(w,p,5u); st.m_idx=6u; }
+    else if (mode == 0x16u) { st.r[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,8u)); st.g[2]|=int(bc6h_read(w,p,1u))<<5; st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,8u)); st.g[3]|=int(bc6h_read(w,p,1u))<<5; st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,5u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,6u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.r[3]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.partition_index=bc6h_read(w,p,5u); st.m_idx=7u; }
     else if (mode == 0x1Au) { st.r[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,8u)); st.b[2]|=int(bc6h_read(w,p,1u))<<5; st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,8u)); st.b[3]|=int(bc6h_read(w,p,1u))<<5; st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,5u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,6u)); st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.r[3]|=int(bc6h_read(w,p,5u)); st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.partition_index=bc6h_read(w,p,5u); st.m_idx=8u; }
     else if (mode == 0x1Eu) { st.r[0]|=int(bc6h_read(w,p,6u)); st.g[3]|=int(bc6h_read(w,p,1u))<<4; st.b[3]|=int(bc6h_read(w,p,1u)); st.b[3]|=int(bc6h_read(w,p,1u))<<1; st.b[2]|=int(bc6h_read(w,p,1u))<<4; st.g[0]|=int(bc6h_read(w,p,6u)); st.g[2]|=int(bc6h_read(w,p,1u))<<5; st.b[2]|=int(bc6h_read(w,p,1u))<<5; st.b[3]|=int(bc6h_read(w,p,1u))<<2; st.g[2]|=int(bc6h_read(w,p,1u))<<4; st.b[0]|=int(bc6h_read(w,p,6u)); st.g[3]|=int(bc6h_read(w,p,1u))<<5; st.b[3]|=int(bc6h_read(w,p,1u))<<3; st.b[3]|=int(bc6h_read(w,p,1u))<<5; st.b[3]|=int(bc6h_read(w,p,1u))<<4; st.r[1]|=int(bc6h_read(w,p,6u)); st.g[2]|=int(bc6h_read(w,p,4u)); st.g[1]|=int(bc6h_read(w,p,6u)); st.g[3]|=int(bc6h_read(w,p,4u)); st.b[1]|=int(bc6h_read(w,p,6u)); st.b[2]|=int(bc6h_read(w,p,4u)); st.r[2]|=int(bc6h_read(w,p,6u)); st.r[3]|=int(bc6h_read(w,p,6u)); st.partition_index=bc6h_read(w,p,5u); st.m_idx=9u; }
     else if (mode == 0x03u) { st.r[0]|=int(bc6h_read(w,p,10u)); st.g[0]|=int(bc6h_read(w,p,10u)); st.b[0]|=int(bc6h_read(w,p,10u)); st.r[1]|=int(bc6h_read(w,p,10u)); st.g[1]|=int(bc6h_read(w,p,10u)); st.b[1]|=int(bc6h_read(w,p,10u)); st.m_idx=10u; }

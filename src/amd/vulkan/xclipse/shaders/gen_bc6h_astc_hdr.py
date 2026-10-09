@@ -381,9 +381,10 @@ void main() {
 # The partition table lives in shared memory, written once per workgroup with constant
 # indices: indexed as a constant array, it was rebuilt in scratch on every lookup.
 import re
-P6H = [int(x.rstrip('u')) for x in re.findall(r'\d+u', grab_line('const uint p6h_packed[129]').split('=', 1)[1])]
-assert len(P6H) == 129
-P6H_SHARED = ('shared uint s_p6h[129];\n'
+# BC6H has the 32 two-subset partitions of BC7: the first 128 words of p2_packed.
+P6H = [int(x.rstrip('u')) for x in re.findall(r'\d+u', grab_line('const uint p2_packed[256]').split('=', 1)[1])][:128]
+assert len(P6H) == 128
+P6H_SHARED = ('shared uint s_p6h[128];\n'
               'void init_p6h() {\n' +
               ''.join('    s_p6h[%d] = %du;\n' % (i, v) for i, v in enumerate(P6H)) +
               '}\n'
@@ -394,7 +395,9 @@ parts = [P6H_SHARED,
          grab_line('uint bc6h_read_r(uvec4 w, inout uint p, uint c)'),
          grab_line('int bc6h_extend_sign(int val, uint bits)'),
          grab_line('int bc6h_transform_inverse('), grab_line('int bc6h_unquantize('),
-         grab_block('struct BC6HState {') + ';', grab_block('BC6HState parse_bc6h(uvec4 w, bool isSigned)')]
+         grab_block('struct BC6HState {') + ';',
+         # the parser reads the partition table of BC7 (get_p2); here it lives in shared memory
+         grab_block('BC6HState parse_bc6h(uvec4 w, bool isSigned)').replace('get_p2(', 'get_p6h(')]
 
 out = sys.argv[1] if len(sys.argv) > 1 else 'bc6h_astc_hdr.glsl'
 open(out, 'w').write(HEADER + '\n'.join(parts) + '\n' + ENCODER)
