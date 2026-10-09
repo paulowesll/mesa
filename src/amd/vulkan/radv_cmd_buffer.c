@@ -9220,11 +9220,11 @@ radv_bind_fragment_output_state(struct radv_cmd_buffer *cmd_buffer, const struct
       cb_shader_mask = 0xf;
    }
 
-   const bool null_export_workaround = radv_needs_null_export_workaround(device, ps, custom_blend_mode);
+   const bool null_export = radv_needs_null_export_workaround(device, ps, custom_blend_mode) && !col_format;
    const bool rbplus_depth_only_enabled =
       radv_can_enable_rbplus_depth_only(cmd_buffer, ps, col_format, custom_blend_mode);
 
-   if ((null_export_workaround && !col_format) || rbplus_depth_only_enabled)
+   if (null_export || rbplus_depth_only_enabled)
       col_format = V_028714_SPI_SHADER_32_R;
 
    /* Xclipse: the null export still reaches the CB, so CB_SHADER_MASK has to describe it.
@@ -9232,8 +9232,12 @@ radv_bind_fragment_output_state(struct radv_cmd_buffer *cmd_buffer, const struct
     * pixels (CB_TARGET_MASK 0, SPI_SHADER_COL_FORMAT 32_R, CB_SHADER_MASK 1). With the mask
     * left at 0 the export is never accounted for and the following CACHE_FLUSH_AND_INV_TS
     * never retires.
+    *
+    * Only describe a null export the shader really makes. RB+ depth-only rendering also sets
+    * 32_R, but there the shader exports nothing, and with a color attachment bound the CB
+    * then waits for an MRT0 export that never comes and the GPU hangs.
     */
-   if (pdev->info.is_xclipse && col_format && !cb_shader_mask)
+   if (pdev->info.is_xclipse && null_export && !cb_shader_mask)
       cb_shader_mask = ac_get_cb_shader_mask(col_format);
 
    if (cmd_buffer->state.spi_shader_col_format != col_format) {
