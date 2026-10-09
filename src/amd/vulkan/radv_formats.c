@@ -289,7 +289,7 @@ radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat forma
       return VK_FORMAT_BC3_UNORM_BLOCK;
    case VK_FORMAT_BC4_SNORM_BLOCK:
    case VK_FORMAT_BC5_SNORM_BLOCK:
-      return VK_FORMAT_R8G8B8A8_UNORM;
+      return VK_FORMAT_R8G8B8A8_SNORM;
    case VK_FORMAT_BC5_UNORM_BLOCK:
    case VK_FORMAT_BC7_UNORM_BLOCK:
       return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
@@ -303,8 +303,8 @@ radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat forma
    }
 }
 
-/* The channels of plane 1 of an emulated BC4_UNORM (BC3 alpha) and BC5_UNORM (ASTC red and alpha)
- * image, as a swizzle to compose with the one of a view.
+/* The channels of plane 1 of an emulated BC4_UNORM (BC3 alpha), BC5_UNORM (ASTC red and alpha) and
+ * BC4/BC5_SNORM (RGBA8 SNORM) image, as a swizzle to compose with the one of a view.
  */
 bool
 radv_bc_emulation_swizzle(VkFormat format, VkComponentMapping *swizzle)
@@ -316,6 +316,15 @@ radv_bc_emulation_swizzle(VkFormat format, VkComponentMapping *swizzle)
       return true;
    case VK_FORMAT_BC5_UNORM_BLOCK:
       *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_ZERO,
+                                      VK_COMPONENT_SWIZZLE_ONE};
+      return true;
+   /* The RGBA8 SNORM plane of BC4/BC5_SNORM: the unused channels come back as 0 and 1. */
+   case VK_FORMAT_BC4_SNORM_BLOCK:
+      *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO,
+                                      VK_COMPONENT_SWIZZLE_ONE};
+      return true;
+   case VK_FORMAT_BC5_SNORM_BLOCK:
+      *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_ZERO,
                                       VK_COMPONENT_SWIZZLE_ONE};
       return true;
    default:
