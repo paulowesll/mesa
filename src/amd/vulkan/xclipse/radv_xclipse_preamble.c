@@ -102,7 +102,6 @@ radv_xclipse_add_native_state(struct ac_pm4_state *pm4)
    /* GFX11 context registers, remapped by ac_pm4_set_reg. */
    ac_pm4_set_reg(pm4, R_028374_PA_SC_CLIPRECT_0_EXT, 0x02000000);
    ac_pm4_set_reg(pm4, R_028384_MGFX4_CLIPRECT_EXT_NEXT, 0);
-   ac_pm4_set_reg(pm4, R_028410_CB_RMI_GL2_CACHE_CONTROL, 0x00800040);
    ac_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x02000000);
    ac_pm4_set_reg(pm4, R_028C54_PA_SC_BINNER_CNTL_2, 0x00100000);
    ac_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE, 0xaa99aaaa);
@@ -129,4 +128,17 @@ radv_xclipse_add_native_state(struct ac_pm4_state *pm4)
       ac_pm4_set_reg(pm4, R_028250_PA_SC_VPORT_SCISSOR_0_TL + i * 8, 0x80000000);
       ac_pm4_set_reg(pm4, R_028254_PA_SC_VPORT_SCISSOR_0_BR + i * 8, 0x40004000);
    }
+}
+
+/* L2 policies of the colour and depth blocks, as the vendor driver programs them: colour and DCC
+ * writes stay in L2 (LRU) and HTILE is cached for reads and writes, while depth/stencil data
+ * streams. The GFX10+ preamble streams colour, DCC and HTILE instead, which on Xclipse costs about
+ * a fifth of the fill and blend rate and of depth-tested overdraw. This has to be emitted after
+ * ac_init_graphics_preamble_state, which programs both registers.
+ */
+void
+radv_xclipse_add_cache_policy(struct ac_pm4_state *pm4)
+{
+   ac_pm4_set_reg(pm4, R_028410_CB_RMI_GL2_CACHE_CONTROL, 0x00800040);
+   ac_pm4_set_reg(pm4, R_02807C_DB_RMI_L2_CACHE_CONTROL, 0x000a0045);
 }

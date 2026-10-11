@@ -46,6 +46,9 @@ uint64_t radv_xclipse_available_memory(void);
 /* Adds the register state a graphics preamble starts with. */
 void radv_xclipse_add_native_state(struct ac_pm4_state *pm4);
 
+/* Restores the vendor L2 policies of the colour and depth blocks; emit after the generic preamble. */
+void radv_xclipse_add_cache_policy(struct ac_pm4_state *pm4);
+
 /* Brackets a shader compilation (begin true, then false) with the vendor kernel's CPU hint. */
 #if RADV_XCLIPSE
 void radv_xclipse_compile_hint(struct radv_device *device, bool begin);

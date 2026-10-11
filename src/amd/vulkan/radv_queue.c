@@ -723,6 +723,11 @@ radv_emit_graphics(struct radv_device *device, struct radv_cmd_stream *cs)
 
    ac_init_graphics_preamble_state(&preamble_state, pm4);
 
+#if RADV_XCLIPSE
+   if (pdev->info.is_xclipse)
+      radv_xclipse_add_cache_policy(pm4);
+#endif
+
    if (!has_clear_state) {
       for (i = 0; i < 16; i++) {
          ac_pm4_set_reg(pm4, R_0282D0_PA_SC_VPORT_ZMIN_0 + i * 8, 0);
