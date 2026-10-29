@@ -1869,7 +1869,8 @@ radv_get_physical_device_properties(struct radv_physical_device *pdev)
 #endif
       .driverVersion = vk_get_driver_version(),
       .vendorID = pdev->info.vendor_id ? pdev->info.vendor_id : ATI_VENDOR_ID,
-      .deviceID = pdev->info.pci_id,
+      /* The kernel of Xclipse reports a Navi 21 PCI ID; the vendor driver exposes the chip revision. */
+      .deviceID = pdev->info.is_xclipse ? pdev->info.chip_rev : pdev->info.pci_id,
       .deviceType = device_type,
       .maxImageDimension1D = pdev->image_props.max_dims.width,
       .maxImageDimension2D = MIN2(pdev->image_props.max_dims.width, pdev->image_props.max_dims.height),
@@ -2840,8 +2841,22 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    pdev->emulate_astc = pdev->drirc.features.require_astc;
 #endif
 
+   /* Xclipse runs the Phoenix profile, but is named as the vendor compiler names its targets:
+    * VANGOGHLITE for the first generation, then MGFX1-MGFX5, the top byte of the chip revision
+    * (Xclipse 960 = MGFX4).
+    */
+   char xclipse_name[16];
    const char *name = ac_get_family_name(pdev->info.family);
-   snprintf(pdev->name, sizeof(pdev->name), "AMD RADV %s%s", name, radv_get_compiler_string(pdev));
+   if (pdev->info.is_xclipse) {
+      const unsigned generation = pdev->info.chip_rev >> 24;
+      if (generation)
+         snprintf(xclipse_name, sizeof(xclipse_name), "MGFX%u", generation);
+      else
+         snprintf(xclipse_name, sizeof(xclipse_name), "VANGOGHLITE");
+      name = xclipse_name;
+   }
+   snprintf(pdev->name, sizeof(pdev->name), "%s RADV %s%s", pdev->info.is_xclipse ? "Samsung" : "AMD", name,
+            radv_get_compiler_string(pdev));
    snprintf(pdev->marketing_name, sizeof(pdev->name), "%s (RADV %s%s)", pdev->info.marketing_name, name,
             radv_get_compiler_string(pdev));
 
