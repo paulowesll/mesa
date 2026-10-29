@@ -698,7 +698,13 @@ radv_physical_device_init_mem_types(struct radv_physical_device *pdev)
 static void
 radv_get_binning_settings(const struct radv_physical_device *pdev, struct radv_binning_settings *settings)
 {
-   if ((pdev->info.has_dedicated_vram && pdev->info.max_render_backends > 4) || pdev->info.gfx_level >= GFX10) {
+   if (pdev->info.is_xclipse) {
+      /* What the vendor driver bins with on every draw. With one state of each kind per bin,
+       * batches were too short to help: overdraw rendered back to front was 2x slower.
+       */
+      settings->context_states_per_bin = 4;
+      settings->persistent_states_per_bin = 32;
+   } else if ((pdev->info.has_dedicated_vram && pdev->info.max_render_backends > 4) || pdev->info.gfx_level >= GFX10) {
       /* Using higher settings on GFX10+ can cause random GPU hangs. */
       settings->context_states_per_bin = 1;
       settings->persistent_states_per_bin = 1;

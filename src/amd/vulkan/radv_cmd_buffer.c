@@ -13254,6 +13254,90 @@ radv_emit_db_shader_control(struct radv_cmd_buffer *cmd_buffer)
    radeon_end();
 }
 
+/* Xclipse bins like its vendor driver, which resolves the depth of a whole batch in the binner
+ * before shading (Z pre-pass, ZPP): only the fragments still visible at the end of the batch run
+ * the fragment shader. With heavy colour targets, overdraw drawn back to front got up to 10x
+ * faster.
+ */
+static bool
+radv_xclipse_writes_color(const struct radv_cmd_buffer *cmd_buffer, unsigned *bytes_per_pixel)
+{
+   const struct radv_rendering_state *render = &cmd_buffer->state.render;
+   const struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
+   unsigned bytes = 0;
+
+   for (unsigned i = 0; i < render->color_att_count; ++i) {
+      if (render->color_att[i].iview && ((d->color_write_mask >> (4 * i)) & 0xfu))
+         bytes += vk_format_get_blocksize(render->color_att[i].format);
+   }
+
+   if (bytes_per_pixel)
+      *bytes_per_pixel = bytes * MAX2(cmd_buffer->state.num_rast_samples, 1);
+   return bytes != 0;
+}
+
+static bool
+radv_xclipse_use_zpp(struct radv_cmd_buffer *cmd_buffer)
+{
+   const struct radv_rendering_state *render = &cmd_buffer->state.render;
+   const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
+   struct vk_depth_stencil_state ds = cmd_buffer->state.dynamic.vk.ds;
+
+   vk_optimize_depth_stencil_state(&ds, render->ds_att_aspects, true);
+
+   /* As the vendor driver: not for draws that only test depth. */
+   if (!ds.depth.test_enable || (!ds.depth.write_enable && !radv_xclipse_writes_color(cmd_buffer, NULL)))
+      return false;
+
+   /* The fragments hidden later in a batch are never shaded nor counted, so keep the API order
+    * where it can be observed: shader side effects and exports of depth, stencil or coverage,
+    * stencil writes, alpha to coverage, occlusion queries and late Z.
+    */
+   if (ps && (ps->info.ps.writes_memory || ps->info.ps.writes_z || ps->info.ps.writes_stencil ||
+              ps->info.ps.writes_sample_mask || ps->info.ps.pops))
+      return false;
+
+   return !ds.stencil.write_enable && !cmd_buffer->state.dynamic.vk.ms.alpha_to_coverage_enable &&
+          !cmd_buffer->state.active_occlusion_queries && !cmd_buffer->state.inherited_occlusion_queries &&
+          !radv_should_enable_late_z(cmd_buffer);
+}
+
+static void
+radv_xclipse_emit_binner_state(struct radv_cmd_buffer *cmd_buffer)
+{
+   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   struct radv_cmd_stream *cs = cmd_buffer->cs;
+   unsigned color_bytes_per_pixel;
+
+   const bool zpp = radv_xclipse_use_zpp(cmd_buffer);
+
+   radv_xclipse_writes_color(cmd_buffer, &color_bytes_per_pixel);
+
+   /* Batches of 2047 primitives let the Z pre-pass discard more overdraw, which pays off when
+    * fragments are expensive to write. Without it, or with light targets, they starve the back end
+    * on small triangles: 1-pixel triangles took twice as long.
+    */
+   const uint32_t cntl_1 = S_028C48_MAX_ALLOC_COUNT(pdev->info.pbb_max_alloc_count) |
+                           S_028C48_MAX_PRIM_PER_BATCH(zpp && color_bytes_per_pixel >= 16 ? 2047 : 511);
+
+   /* The vendor value, with the GFX11.5 names of its bits. */
+   const uint32_t cntl_2 = S_028C54_ZPP_ENABLED(zpp) | S_028C54_DISABLE_NOPCEXPORT_BREAKBATCH_CONDITION(1) |
+                           S_028C54_SBB_ENABLE(1) | S_028C54_ENABLE_PING_PONG_BIN_ORDER(1) |
+                           S_028C54_PING_PONG_BIN_ORDER_FLIP(3);
+
+   radeon_begin(cs);
+   if (cmd_buffer->state.last_pa_sc_binner_cntl_1 != cntl_1) {
+      radeon_set_context_reg(R_028C48_PA_SC_BINNER_CNTL_1, cntl_1);
+      cmd_buffer->state.last_pa_sc_binner_cntl_1 = cntl_1;
+   }
+   if (cmd_buffer->state.last_pa_sc_binner_cntl_2 != cntl_2) {
+      radeon_set_context_reg(R_028C54_PA_SC_BINNER_CNTL_2, cntl_2);
+      cmd_buffer->state.last_pa_sc_binner_cntl_2 = cntl_2;
+   }
+   radeon_end();
+}
+
 static void
 radv_emit_streamout_enable_state(struct radv_cmd_buffer *cmd_buffer)
 {
@@ -14110,6 +14194,11 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
    if (dynamic_states)
       radv_validate_dynamic_states(cmd_buffer, dynamic_states);
 
+   const bool xclipse_binner_dirty =
+      pdev->info.is_xclipse && device->pbb_allowed &&
+      (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_BINNING_STATE | RADV_CMD_DIRTY_DB_SHADER_CONTROL |
+                                  RADV_CMD_DIRTY_DEPTH_STENCIL_STATE | RADV_CMD_DIRTY_OCCLUSION_QUERY));
+
    if (pdev->gfx12_hiz_wa == RADV_GFX12_HIZ_WA_FULL_REZ &&
        (cmd_buffer->state.dirty & RADV_CMD_DIRTY_DB_SHADER_CONTROL))
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GFX12_HIZ_WA_STATE;
@@ -14225,6 +14314,9 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
       radv_emit_depth_stencil_state(cmd_buffer);
       cmd_buffer->state.dirty &= ~RADV_CMD_DIRTY_DEPTH_STENCIL_STATE;
    }
+
+   if (xclipse_binner_dirty)
+      radv_xclipse_emit_binner_state(cmd_buffer);
 
    if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_BLEND_CONSTANTS_STATE) {
       radv_emit_blend_constants_state(cmd_buffer);

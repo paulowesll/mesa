@@ -215,6 +215,8 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    info->has_scratch_base_registers = true;
    info->se_tile_repeat = 32 * info->max_se;
    info->instr_prefetch_distance = 3;
+   /* Parameter cache allocations per binning batch, as the vendor driver programs them. */
+   info->pbb_max_alloc_count = 169;
 
    /* TMPRING follows GFX10: WAVESIZE in 1 KiB units and WAVES for the whole device, not per SE.
     * With the GFX11 encoding, waves were placed 4x further apart than the scratch buffer allows.

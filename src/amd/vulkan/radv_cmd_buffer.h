@@ -393,6 +393,8 @@ struct radv_cmd_state {
    bool depth_clip_enable;
 
    uint32_t last_cb_target_mask;
+   uint32_t last_pa_sc_binner_cntl_1; /* Xclipse, 0 if unknown */
+   uint32_t last_pa_sc_binner_cntl_2; /* Xclipse, 0 if unknown */
    uint32_t last_ia_multi_vgt_param;
    uint32_t last_ge_cntl;
    uint32_t last_num_instances;

@@ -581,7 +581,8 @@ gfx10_init_graphics_preamble_state(const struct ac_preamble_state *state,
    unsigned gfx10_one = info->gfx_level < GFX11;
    ac_pm4_set_reg(pm4, R_028C48_PA_SC_BINNER_CNTL_1,
                   S_028C48_MAX_ALLOC_COUNT(info->pbb_max_alloc_count - gfx10_one) |
-                  S_028C48_MAX_PRIM_PER_BATCH(1023));
+                  /* The vendor driver of Xclipse batches at most 511 primitives. */
+                  S_028C48_MAX_PRIM_PER_BATCH(info->is_xclipse ? 511 : 1023));
    if (info->gfx_level >= GFX11) {
       /* Ping pong binning order is supported on GFX11.5 but it seems to
        * cause rendering issues. Might be a hardware bug.

@@ -86,8 +86,11 @@ radv_xclipse_add_native_state(struct ac_pm4_state *pm4)
    add_uconfig_seq(pm4, MGFX4_UCONFIG_SIMD_CONFIG, 16, simd_config);
    add_uconfig_seq(pm4, MGFX4_UCONFIG_490, 2, (const uint32_t[]){0, 0});
    add_uconfig(pm4, MGFX4_UCONFIG_493, 0x00000041);
+   /* The vendor clears bit 7 of 0x494/0x495, whose meaning is unknown. With it set, the Z pre-pass of
+    * the binner was 20% slower on six RGBA16F targets.
+    */
    add_uconfig_seq(pm4, MGFX4_UCONFIG_494, 11,
-                   (const uint32_t[]){0x0001ffff, 0x0001ffff, 0x0001ffff, 0xffffffff, 0xffffffff, 0xffffffff,
+                   (const uint32_t[]){0x0001ff7f, 0x0001ff7f, 0x0001ffff, 0xffffffff, 0xffffffff, 0xffffffff,
                                       0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff});
    add_uconfig(pm4, MGFX4_UCONFIG_4C0, 0x00080128);
    add_uconfig(pm4, (R_030964_GE_MAX_VTX_INDX - CIK_UCONFIG_REG_OFFSET) >> 2, 0xffffffff);
