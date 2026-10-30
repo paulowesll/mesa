@@ -2678,7 +2678,10 @@ radv_gfx10_compute_bin_size(struct radv_cmd_buffer *cmd_buffer)
          extent = db_extent;
    }
 
-   extent.width = MAX2(extent.width, 128);
+   /* Xclipse bins at 64x64 too, as its vendor driver does for heavy colour targets: with 128x64,
+    * six RGBA16F targets sampling a small texture were 3x slower.
+    */
+   extent.width = MAX2(extent.width, pdev->info.is_xclipse ? 64 : 128);
    extent.height = MAX2(extent.height, pdev->info.gfx_level >= GFX12 ? 128 : 64);
 
    if (pdev->info.gfx_level >= GFX12) {
