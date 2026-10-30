@@ -553,41 +553,65 @@ uint bc5_q5_value(uint e0, uint e1, uint q) {
     return (e0 * (64u - w) + e1 * w + 32u) >> 6u;
 }
 
-uint bc5_q5_pick(uint e0, uint e1, uint v) {
-    uint best = 0u, best_err = 0xffffffffu;
-    for (uint q = 0u; q < 5u; q++) {
-        int d = int(bc5_q5_value(e0, e1, q)) - int(v);
-        uint err = uint(d * d);
-        if (err < best_err) { best_err = err; best = q; }
-    }
+/* The weight whose level is nearest to v, the lowest one on a tie.  The
+ * levels of the endpoint pair are computed once, not once per texel. */
+uint bc5_q5_pick(uvec4 lv, uint lv4, uint v) {
+    uint best = 0u, best_err = uint(abs(int(lv.x) - int(v)));
+    uint err = uint(abs(int(lv.y) - int(v)));
+    if (err < best_err) { best_err = err; best = 1u; }
+    err = uint(abs(int(lv.z) - int(v)));
+    if (err < best_err) { best_err = err; best = 2u; }
+    err = uint(abs(int(lv.w) - int(v)));
+    if (err < best_err) { best_err = err; best = 3u; }
+    err = uint(abs(int(lv4) - int(v)));
+    if (err < best_err) best = 4u;
     return best;
 }
 
-uint bc5_q5_error(uint v[ASTC_BLOCK_TEXELS], uint e0, uint e1) {
+/* Squared error of a channel with the given endpoints; also returns the
+ * weight of every texel, three bits each (texels 0-7 in x, 8-15 in y), so
+ * that the least-squares refit and the final encode do not pick them again. */
+uint bc5_q5_error(uint v[ASTC_BLOCK_TEXELS], uint e0, uint e1, out uvec2 picks) {
+    uvec4 lv = uvec4(bc5_q5_value(e0, e1, 0u), bc5_q5_value(e0, e1, 1u),
+                     bc5_q5_value(e0, e1, 2u), bc5_q5_value(e0, e1, 3u));
+    uint lv4 = bc5_q5_value(e0, e1, 4u);
     uint total = 0u;
+    picks = uvec2(0u);
     for (uint i = 0u; i < ASTC_BLOCK_TEXELS; i++) {
-        int d = int(bc5_q5_value(e0, e1, bc5_q5_pick(e0, e1, v[i]))) - int(v[i]);
+        uint q = bc5_q5_pick(lv, lv4, v[i]);
+        uint level = q == 4u ? lv4 : lv[q];
+        int d = int(level) - int(v[i]);
         total += uint(d * d);
+        if (i < 8u)
+            picks.x |= q << (3u * i);
+        else
+            picks.y |= q << (3u * (i - 8u));
     }
     return total;
+}
+
+uint bc5_q5_weight(uvec2 picks, uint i) {
+    return i < 8u ? (picks.x >> (3u * i)) & 7u : (picks.y >> (3u * (i - 8u))) & 7u;
 }
 
 /* Endpoints for one channel.  With only five weight levels the extremes are
  * rarely the best endpoints, so start from min/max and refit by least squares
  * against the weights they select, keeping whichever pair errs least. */
-uvec2 bc5_fit_channel(uint v[ASTC_BLOCK_TEXELS]) {
+uvec2 bc5_fit_channel(uint v[ASTC_BLOCK_TEXELS], out uvec2 best_picks) {
     uint lo = 255u, hi = 0u;
     for (uint i = 0u; i < ASTC_BLOCK_TEXELS; i++) {
         lo = min(lo, v[i]);
         hi = max(hi, v[i]);
     }
+    uvec2 picks;
     uvec2 best = uvec2(lo, hi);
-    uint best_err = bc5_q5_error(v, lo, hi);
+    uint best_err = bc5_q5_error(v, lo, hi, picks);
+    best_picks = picks;
     uint e0 = lo, e1 = hi;
     for (uint it = 0u; it < 3u && best_err != 0u; it++) {
         float a = 0.0, b = 0.0, c = 0.0, d = 0.0, e = 0.0;
         for (uint i = 0u; i < ASTC_BLOCK_TEXELS; i++) {
-            float t = float(bc5_q5_pick(e0, e1, v[i])) * 0.25;
+            float t = float(bc5_q5_weight(picks, i)) * 0.25;
             float x = float(v[i]);
             a += (1.0 - t) * (1.0 - t);
             b += t * (1.0 - t);
@@ -600,10 +624,11 @@ uvec2 bc5_fit_channel(uint v[ASTC_BLOCK_TEXELS]) {
             break;
         e0 = uint(clamp(round((d * c - b * e) / det), 0.0, 255.0));
         e1 = uint(clamp(round((a * e - b * d) / det), 0.0, 255.0));
-        uint err = bc5_q5_error(v, e0, e1);
+        uint err = bc5_q5_error(v, e0, e1, picks);
         if (err < best_err) {
             best_err = err;
             best = uvec2(e0, e1);
+            best_picks = picks;
         }
     }
     return best;
@@ -615,12 +640,13 @@ uvec4 encode_bc5_dual_plane(uvec4 s[ASTC_BLOCK_TEXELS]) {
         x[i] = s[i].r;
         y[i] = s[i].a;
     }
-    uvec2 ex = bc5_fit_channel(x), ey = bc5_fit_channel(y);
+    uvec2 px, py;
+    uvec2 ex = bc5_fit_channel(x, px), ey = bc5_fit_channel(y, py);
     uint lo0 = ex.x, hi0 = ex.y, lo1 = ey.x, hi1 = ey.y;
     uint w[32];
     for (uint i = 0u; i < ASTC_BLOCK_TEXELS; i++) {
-        w[2u * i + 0u] = bc5_q5_pick(lo0, hi0, s[i].r);
-        w[2u * i + 1u] = bc5_q5_pick(lo1, hi1, s[i].a);
+        w[2u * i + 0u] = bc5_q5_weight(px, i);
+        w[2u * i + 1u] = bc5_q5_weight(py, i);
     }
 
     uvec4 b = uvec4(0u);
