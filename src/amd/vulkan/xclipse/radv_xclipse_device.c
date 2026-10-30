@@ -37,7 +37,7 @@
 #include "vk_extensions.h"
 #include "vk_physical_device_features.h"
 
-/* Topology of Xclipse 960 (fixed; the vendor query does not describe it completely). */
+/* Topology of Xclipse 960, for a kernel that does not report one. */
 #define XCLIPSE_NUM_SE              2u
 #define XCLIPSE_SA_PER_SE           2u
 #define XCLIPSE_CU_PER_SA           4u
@@ -84,24 +84,33 @@ radv_xclipse_init_topology(struct radeon_info *info)
 {
    STATIC_ASSERT(XCLIPSE_NUM_SE <= AMD_MAX_SE && XCLIPSE_SA_PER_SE <= AMD_MAX_SA_PER_SE);
 
-   info->num_se = XCLIPSE_NUM_SE;
-   info->max_se = XCLIPSE_NUM_SE;
-   info->max_sa_per_se = XCLIPSE_SA_PER_SE;
-   info->num_cu_per_sh = XCLIPSE_CU_PER_SA;
-   info->min_good_cu_per_sa = XCLIPSE_CU_PER_SA;
-   info->max_good_cu_per_sa = XCLIPSE_CU_PER_SA;
-   info->num_cu = XCLIPSE_NUM_SE * XCLIPSE_SA_PER_SE * XCLIPSE_CU_PER_SA;
-   info->spi_cu_en = BITFIELD_MASK(XCLIPSE_CU_PER_SA);
-   info->spi_cu_en_has_effect = true;
+   /* ac_fill_hw_info has described the topology from the kernel, which reports it completely on
+    * Xclipse 960 (2 SE x 2 SA x 4 CU, 8 RBs). Other generations have other topologies, so the
+    * fixed one is only used if the kernel reports none.
+    */
+   if (!info->max_se || !info->max_sa_per_se || !info->num_cu || !info->max_render_backends ||
+       !info->enabled_rb_mask) {
+      info->num_se = XCLIPSE_NUM_SE;
+      info->max_se = XCLIPSE_NUM_SE;
+      info->max_sa_per_se = XCLIPSE_SA_PER_SE;
+      info->num_cu_per_sh = XCLIPSE_CU_PER_SA;
+      info->min_good_cu_per_sa = XCLIPSE_CU_PER_SA;
+      info->max_good_cu_per_sa = XCLIPSE_CU_PER_SA;
+      info->num_cu = XCLIPSE_NUM_SE * XCLIPSE_SA_PER_SE * XCLIPSE_CU_PER_SA;
 
-   memset(info->cu_mask, 0, sizeof(info->cu_mask));
-   for (unsigned se = 0; se < XCLIPSE_NUM_SE; se++) {
-      for (unsigned sa = 0; sa < XCLIPSE_SA_PER_SE; sa++)
-         info->cu_mask[se][sa] = BITFIELD_MASK(XCLIPSE_CU_PER_SA);
+      memset(info->cu_mask, 0, sizeof(info->cu_mask));
+      for (unsigned se = 0; se < XCLIPSE_NUM_SE; se++) {
+         for (unsigned sa = 0; sa < XCLIPSE_SA_PER_SE; sa++)
+            info->cu_mask[se][sa] = BITFIELD_MASK(XCLIPSE_CU_PER_SA);
+      }
+
+      info->max_render_backends = XCLIPSE_NUM_SE * XCLIPSE_RB_PER_SE;
+      info->enabled_rb_mask = BITFIELD64_MASK(info->max_render_backends);
+      info->num_rb = info->max_render_backends;
    }
 
-   /* Device-wide count, disabled backends included. */
-   info->max_render_backends = XCLIPSE_NUM_SE * XCLIPSE_RB_PER_SE;
+   info->spi_cu_en = BITFIELD_MASK(info->max_good_cu_per_sa);
+   info->spi_cu_en_has_effect = true;
    info->compiler_info.max_waves_per_simd = XCLIPSE_MAX_WAVES_PER_SIMD;
 }
 
