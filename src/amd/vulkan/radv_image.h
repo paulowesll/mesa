@@ -84,6 +84,8 @@ struct radv_image {
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(radv_image, vk.base, VkImage, VK_OBJECT_TYPE_IMAGE)
 
+bool radv_image_prefers_uswc(const struct radv_device *device, const struct radv_image *image);
+
 static inline bool
 radv_image_extent_compare(const struct radv_image *image, const VkExtent3D *extent)
 {

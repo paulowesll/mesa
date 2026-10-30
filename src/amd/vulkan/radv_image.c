@@ -2051,3 +2051,19 @@ radv_GetImageOpaqueCaptureDataEXT(VkDevice device, uint32_t imageCount, const Vk
 
    return VK_SUCCESS;
 }
+
+/* The vendor driver of Xclipse gives all of its memory uncached GPU page attributes (USWC). With the
+ * cached attributes, the scattered writes of many small draws to several colour targets took 2.5x
+ * to 3x as long as on the vendor driver, and kept the memory clock at its maximum. Colour targets
+ * ask for an allocation of their own, which is then made USWC. Textures keep the cached attributes:
+ * with USWC, a G-buffer pass sampling a large texture got slower.
+ */
+bool
+radv_image_prefers_uswc(const struct radv_device *device, const struct radv_image *image)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   return pdev->info.is_xclipse && (image->vk.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
+          image->vk.tiling != VK_IMAGE_TILING_LINEAR && !image->vk.external_handle_types &&
+          !(image->vk.create_flags & (VK_IMAGE_CREATE_SPARSE_BINDING_BIT | VK_IMAGE_CREATE_DISJOINT_BIT));
+}

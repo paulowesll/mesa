@@ -214,6 +214,13 @@ radv_alloc_memory(struct radv_device *device, const VkMemoryAllocateInfo *pAlloc
       if (flags_info && flags_info->flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT)
          flags |= RADEON_FLAG_REPLAYABLE;
 
+      /* Memory the CPU never maps, dedicated to an Xclipse colour target. */
+      if (mem->image &&
+          !(pdev->memory_properties.memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags &
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+          radv_image_prefers_uswc(device, mem->image))
+         flags |= RADEON_FLAG_XCLIPSE_USWC;
+
       /* Only apply the workaround for BOs created by the application, not by the driver. */
       if (pdev->drirc.debug.wait_for_vm_map_updates)
          flags |= RADEON_FLAG_VM_UPDATE_WAIT;

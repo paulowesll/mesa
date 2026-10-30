@@ -53,6 +53,8 @@ enum radeon_bo_flag { /* bitfield */
                       RADEON_FLAG_VM_PAD_1PAGE = (1 << 14),
                       RADEON_FLAG_ENCRYPTED = (1 << 15),
                       RADEON_FLAG_EMULATE_SPARSE_RESIDENCY = (1 << 16),
+                      /* Xclipse: uncached GPU page attributes (CPU_GTT_USWC), as the vendor driver allocates. */
+                      RADEON_FLAG_XCLIPSE_USWC = (1 << 17),
 };
 
 enum radeon_ctx_priority {

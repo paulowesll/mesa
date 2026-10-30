@@ -58,6 +58,8 @@ radv_sgpu_create_flags(enum radeon_bo_flag flags)
    /* RADEON_FLAG_GTT_WC is deliberately not turned into CPU_GTT_USWC: the command processor
     * and scalar caches need the ordinary cached GTT page attributes on this GPU.
     */
+   if (flags & RADEON_FLAG_XCLIPSE_USWC)
+      result |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
    return result;
 }
 

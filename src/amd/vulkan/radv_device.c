@@ -1813,7 +1813,7 @@ radv_GetImageMemoryRequirements2(VkDevice _device, const VkImageMemoryRequiremen
          VkMemoryDedicatedRequirements *req = ext;
          req->requiresDedicatedAllocation =
             image->vk.external_handle_types && image->vk.tiling != VK_IMAGE_TILING_LINEAR;
-         req->prefersDedicatedAllocation = req->requiresDedicatedAllocation;
+         req->prefersDedicatedAllocation = req->requiresDedicatedAllocation || radv_image_prefers_uswc(device, image);
          break;
       }
       default:
