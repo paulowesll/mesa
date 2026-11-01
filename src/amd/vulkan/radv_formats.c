@@ -613,6 +613,10 @@ radv_physical_device_get_format_properties(struct radv_physical_device *pdev, Vk
          tiled &= ~VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
          linear &= ~VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
       }
+
+      /* Copies from linear 96-bit images returned zeros. The vendor driver has no 96-bit images. */
+      if (vk_format_is_96bit(format))
+         linear = 0;
    }
 
    /* addrlib does not support linear compressed textures. */
