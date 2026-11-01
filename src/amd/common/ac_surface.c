@@ -97,6 +97,10 @@ drmGetFormatModifierName(uint64_t modifier)
 
 struct ac_addrlib {
    ADDR_HANDLE handle;
+   /* Xclipse: a GFX10.3 addrlib for the FMASK and CMASK of MSAA colour surfaces, which GFX11 removed
+    * and the colour block of Xclipse still has.
+    */
+   ADDR_HANDLE fmask_handle;
    simple_mtx_t lock;
 
    /* Monotonic counters to randomize radeon_surf::tile_swizzle for each allocated image layout.
@@ -1072,6 +1076,16 @@ struct ac_addrlib *ac_addrlib_create(const struct radeon_info *info,
    }
 
    addrlib->handle = addrCreateOutput.hLib;
+
+   if (info->is_xclipse) {
+      ADDR_CREATE_INPUT fmaskCreateInput = addrCreateInput;
+      ADDR_CREATE_OUTPUT fmaskCreateOutput = {.size = sizeof(ADDR_CREATE_OUTPUT)};
+
+      fmaskCreateInput.chipFamily = FAMILY_NV;
+      fmaskCreateInput.chipRevision = 0x28; /* Navi 21, GFX10.3 */
+      if (AddrCreate(&fmaskCreateInput, &fmaskCreateOutput) == ADDR_OK)
+         addrlib->fmask_handle = fmaskCreateOutput.hLib;
+   }
    simple_mtx_init(&addrlib->lock, mtx_plain);
    return addrlib;
 }
@@ -1080,6 +1094,8 @@ void ac_addrlib_destroy(struct ac_addrlib *addrlib)
 {
    simple_mtx_destroy(&addrlib->lock);
    AddrDestroy(addrlib->handle);
+   if (addrlib->fmask_handle)
+      AddrDestroy(addrlib->fmask_handle);
    free(addrlib);
 }
 
@@ -2974,7 +2990,7 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
          }
       }
 
-      if (info->compiler_info.has_fmask && info->has_graphics &&
+      if ((info->compiler_info.has_fmask || addrlib->fmask_handle) && info->has_graphics &&
           in->numSamples > 1 && !(surf->flags & RADEON_SURF_NO_FMASK)) {
          ADDR2_COMPUTE_FMASK_INFO_INPUT fin = {0};
          ADDR2_COMPUTE_FMASK_INFO_OUTPUT fout = {0};
@@ -2982,9 +2998,14 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
          fin.size = sizeof(ADDR2_COMPUTE_FMASK_INFO_INPUT);
          fout.size = sizeof(ADDR2_COMPUTE_FMASK_INFO_OUTPUT);
 
-         ret = gfx9_get_preferred_swizzle_mode(addrlib, info, surf, in, true, &fin.swizzleMode);
-         if (ret != ADDR_OK)
-            return ret;
+         if (addrlib->fmask_handle) {
+            /* What the vendor driver of Xclipse uses. */
+            fin.swizzleMode = ADDR_SW_64KB_Z_X;
+         } else {
+            ret = gfx9_get_preferred_swizzle_mode(addrlib, info, surf, in, true, &fin.swizzleMode);
+            if (ret != ADDR_OK)
+               return ret;
+         }
 
          fin.unalignedWidth = in->width;
          fin.unalignedHeight = in->height;
@@ -2992,7 +3013,7 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
          fin.numSamples = in->numSamples;
          fin.numFrags = in->numFrags;
 
-         ret = Addr2ComputeFmaskInfo(addrlib->handle, &fin, &fout);
+         ret = Addr2ComputeFmaskInfo(addrlib->fmask_handle ? addrlib->fmask_handle : addrlib->handle, &fin, &fout);
          if (ret != ADDR_OK)
             return ret;
 
@@ -3003,7 +3024,7 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
          surf->fmask_slice_size = fout.sliceSize;
 
          /* Compute tile swizzle for the FMASK surface. */
-         if (fin.swizzleMode >= ADDR_SW_64KB_Z_T && use_tile_swizzle(config, surf, true)) {
+         if (!addrlib->fmask_handle && fin.swizzleMode >= ADDR_SW_64KB_Z_T && use_tile_swizzle(config, surf, true)) {
             ADDR2_COMPUTE_PIPEBANKXOR_INPUT xin = {0};
             ADDR2_COMPUTE_PIPEBANKXOR_OUTPUT xout = {0};
 
@@ -3029,7 +3050,7 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
       }
 
       /* CMASK -- on GFX10 only for FMASK (and it doesn't exist on GFX11) */
-      if (info->compiler_info.has_fmask && info->has_graphics &&
+      if ((info->compiler_info.has_fmask || addrlib->fmask_handle) && info->has_graphics &&
           in->swizzleMode != ADDR_SW_LINEAR && in->resourceType == ADDR_RSRC_TEX_2D &&
           ((info->gfx_level <= GFX9 && in->numSamples == 1 && in->flags.metaPipeUnaligned == 0 &&
             in->flags.metaRbUnaligned == 0) ||
@@ -3061,7 +3082,7 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
 
          if (info->gfx_level == GFX9)
             simple_mtx_lock(&addrlib->lock);
-         ret = Addr2ComputeCmaskInfo(addrlib->handle, &cin, &cout);
+         ret = Addr2ComputeCmaskInfo(addrlib->fmask_handle ? addrlib->fmask_handle : addrlib->handle, &cin, &cout);
          if (info->gfx_level == GFX9)
             simple_mtx_unlock(&addrlib->lock);
 
