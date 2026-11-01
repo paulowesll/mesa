@@ -333,6 +333,7 @@ struct ac_fmask_state {
    uint32_t num_samples : 5;
    uint32_t num_storage_samples : 4;
    uint32_t tc_compat_cmask : 1;
+   uint32_t uint_format : 1; /* Xclipse: the raw FMASK elements, no FMASK format */
 };
 
 void
