@@ -1588,6 +1588,12 @@ ac_set_mutable_cb_surface_fields(const struct radeon_info *info, const struct ac
       cb->cb_color_attrib3 |= S_028EE0_COLOR_SW_MODE(surf->u.gfx9.swizzle_mode) |
                               S_028EE0_DCC_PIPE_ALIGNED(surf->u.gfx9.color.dcc.pipe_aligned);
 
+      /* The CB of Xclipse has the GFX10.3 FMASK and CMASK fields. */
+      if (info->is_xclipse && surf->fmask_offset) {
+         cb->cb_color_attrib3 |= S_028EE0_FMASK_SW_MODE(surf->u.gfx9.color.fmask_swizzle_mode) |
+                                 S_028EE0_CMASK_PIPE_ALIGNED(1);
+      }
+
       /* The CB of Xclipse follows GFX10.3: CB_COLOR_INFO.DCC_ENABLE enables DCC, and the
        * FDCC_ENABLE bit is DCC_COMPRESS_DISABLE there.
        */

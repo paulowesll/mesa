@@ -341,6 +341,12 @@ radv_use_fmask_for_image(const struct radv_device *device, const struct radv_ima
       return false;
    }
 
+   /* At 8 samples, the colour block of Xclipse does not use the FMASK layout of GFX10.3 (it wrote a
+    * quarter of it), and the device exposes 4 samples at most.
+    */
+   if (pdev->info.is_xclipse && image->vk.samples > 4)
+      return false;
+
    return pdev->use_fmask && image->vk.samples > 1 && (image->vk.usage & VK_IMAGE_USAGE_2_COLOR_ATTACHMENT_BIT_KHR);
 }
 
@@ -390,6 +396,12 @@ radv_use_tc_compat_cmask_for_image(struct radv_device *device, struct radv_image
 
    /* TC-compat CMASK is only available for GFX8+. */
    if (pdev->info.gfx_level < GFX8)
+      return false;
+
+   /* The texture unit of Xclipse does not read CMASK: MSAA resolves of fast-cleared tiles were
+    * wrong. FMASK is decompressed before shader reads instead.
+    */
+   if (pdev->info.is_xclipse)
       return false;
 
    /* GFX9 has issues when sample count is greater than 2 */

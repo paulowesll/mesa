@@ -5014,6 +5014,16 @@ radv_gfx11_emit_fb_color_state(struct radv_cmd_buffer *cmd_buffer, int index, co
    const bool dcc_enabled =
       pdev->info.is_xclipse ? G_028C70_DCC_ENABLE(cb_color_info) : G_028C78_FDCC_ENABLE(cb_fdcc_control);
 
+   /* It also compresses MSAA with FMASK and CMASK, like GFX10.3. */
+   if (pdev->info.is_xclipse) {
+      const enum radv_fmask_compression fmask_comp = radv_layout_fmask_compression(
+         device, image, layout, radv_image_queue_family_mask(image, cmd_buffer->qf));
+      if (fmask_comp == RADV_FMASK_COMPRESSION_NONE)
+         cb_color_info &= C_028C70_COMPRESSION;
+      if (iview->disable_tc_compat_cmask_mrt)
+         cb_color_info &= C_028C70_FMASK_COMPRESS_1FRAG_ONLY;
+   }
+
    radeon_begin(cs);
    if (pdev->info.has_set_context_pairs_packed) {
       gfx11_begin_packed_context_regs();
@@ -5042,6 +5052,13 @@ radv_gfx11_emit_fb_color_state(struct radv_cmd_buffer *cmd_buffer, int index, co
       radeon_set_context_reg(R_028EA0_CB_COLOR0_DCC_BASE_EXT + index * 4, S_028EA0_BASE_256B(cb->ac.cb_dcc_base >> 32));
       radeon_set_context_reg(R_028EC0_CB_COLOR0_ATTRIB2 + index * 4, cb->ac.cb_color_attrib2);
       radeon_set_context_reg(R_028EE0_CB_COLOR0_ATTRIB3 + index * 4, cb->ac.cb_color_attrib3);
+   }
+   if (pdev->info.is_xclipse) {
+      /* Zero without FMASK, as the vendor driver writes them. */
+      radeon_set_context_reg(R_028C7C_CB_COLOR0_CMASK + index * 0x3c,
+                             radv_image_has_cmask(image) ? cb->ac.cb_color_cmask : 0);
+      radeon_set_context_reg(R_028C84_CB_COLOR0_FMASK + index * 0x3c,
+                             radv_image_has_fmask(image) ? cb->ac.cb_color_fmask : 0);
    }
    radeon_end();
 

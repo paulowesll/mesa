@@ -2869,7 +2869,8 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
    pdev->dcc_msaa_allowed = (instance->perftest_flags & RADV_PERFTEST_DCC_MSAA);
 
-   pdev->use_fmask = pdev->info.compiler_info.has_fmask && !(RADV_DEBUG(instance, NO_FMASK));
+   /* The colour block of Xclipse compresses MSAA with FMASK like GFX10.3, although its profile is GFX11. */
+   pdev->use_fmask = (pdev->info.compiler_info.has_fmask || pdev->info.is_xclipse) && !(RADV_DEBUG(instance, NO_FMASK));
 
    pdev->force_64_byte_sampled_image = !pdev->use_fmask && pdev->drirc.debug.force_64_byte_sampled_image;
 
