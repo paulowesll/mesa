@@ -2886,7 +2886,12 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
 
          if (info->gfx_level == GFX9)
             simple_mtx_lock(&addrlib->lock);
-         ret = Addr2ComputeDccInfo(addrlib->handle, &din, &dout);
+         /* Xclipse lays out MSAA DCC as GFX10.3 does, which differs from GFX11 at 4 samples: with the
+          * GFX11 layout, fast clears of one layer of an array changed the other layers.
+          */
+         ret = Addr2ComputeDccInfo(addrlib->fmask_handle && in->numSamples > 1 ? addrlib->fmask_handle
+                                                                               : addrlib->handle,
+                                   &din, &dout);
          if (info->gfx_level == GFX9)
             simple_mtx_unlock(&addrlib->lock);
 
