@@ -2312,7 +2312,6 @@ struct DeviceInfo {
    bool has_vopd_hang = false;
    bool has_rtz_cvt_pkrtz_fusion_bug = false;
    bool has_gl1_sa_scope_glc = false;
-   bool has_packed_fmask = false;
    bool needs_mem_ordered = false;
 
    int32_t scratch_global_offset_min;

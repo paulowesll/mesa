@@ -207,7 +207,7 @@ radv_make_texture_descriptor(struct radv_device *device, struct radv_image *imag
             .num_samples = image->vk.samples,
             .num_storage_samples = image->vk.samples,
             .tc_compat_cmask = radv_image_is_tc_compat_cmask(image),
-            .uint_format = pdev->info.is_xclipse,
+            .xclipse_format = pdev->info.is_xclipse,
          };
 
          ac_build_fmask_descriptor(pdev->info.gfx_level, &ac_state, &fmask_state[0]);

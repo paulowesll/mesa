@@ -138,8 +138,6 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
        * need DLC.
        */
       program->dev.has_gl1_sa_scope_glc = true;
-      /* There are no FMASK formats: FMASK is read as raw elements (see unpack_packed_fmask). */
-      program->dev.has_packed_fmask = true;
       /* Memory returns out of order unless MEM_ORDERED is set, and GPU hangs followed. */
       program->dev.needs_mem_ordered = true;
       /* Scratch is sized in 1 KiB units, as on GFX10 (see radeon_info). */

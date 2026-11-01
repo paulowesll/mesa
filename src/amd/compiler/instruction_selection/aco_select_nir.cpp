@@ -74,32 +74,6 @@ get_const_vec(nir_def* vec, nir_const_value* cv[4])
    }
 }
 
-/* Xclipse reads FMASK as raw UINT elements, with 1 (2 samples), 2 (4 samples) or 4 (8 samples) bits
- * per sample, where FMASK formats return 4 bits per sample. The descriptor holds the width in its
- * DST_SEL_W (SQ_SEL_0, SQ_SEL_1 or SQ_SEL_X), unused because only X is loaded.
- */
-static Temp
-unpack_packed_fmask(isel_context* ctx, Temp raw, Temp resource)
-{
-   Builder bld(ctx->program, ctx->block);
-   Temp desc3 = emit_extract_vector(ctx, resource, 3, s1);
-   Temp sel = bld.sop2(aco_opcode::s_bfe_u32, bld.def(s1), bld.def(s1, scc), desc3, Operand::c32((3u << 16) | 9u));
-   Temp one_bit = bld.sopc(aco_opcode::s_cmp_eq_u32, bld.def(s1, scc), sel, Operand::zero());
-   Temp width = bld.sop2(aco_opcode::s_cselect_b32, bld.def(s1), Operand::c32(1), Operand::c32(2), bld.scc(one_bit));
-
-   /* Fields 3..0 of the given width, each moved to its own nibble. */
-   Temp result = Temp();
-   for (int i = 3; i >= 0; i--) {
-      Temp offset = bld.sop2(aco_opcode::s_mul_i32, bld.def(s1), width, Operand::c32(i));
-      Temp field = bld.vop3(aco_opcode::v_bfe_u32, bld.def(v1), raw, offset, width);
-      result = result.id() ? bld.vop3(aco_opcode::v_lshl_or_b32, bld.def(v1), result, Operand::c32(4), field) : field;
-   }
-
-   /* 4 bits per sample already. */
-   Temp four_bits = bld.sopc(aco_opcode::s_cmp_eq_u32, bld.def(s1, scc), sel, Operand::c32(V_008F1C_SQ_SEL_X));
-   return bld.vop2(aco_opcode::v_cndmask_b32, bld.def(v1), result, raw, bool_to_vector_condition(ctx, four_bits));
-}
-
 void
 visit_tex(isel_context* ctx, nir_tex_instr* instr)
 {
@@ -492,9 +466,6 @@ visit_tex(isel_context* ctx, nir_tex_instr* instr)
          /* Use 0x76543210 if the image doesn't have FMASK. */
          assert(dmask == 1 && dst.bytes() == 4);
          assert(dst.id() != tmp_dst.id());
-
-         if (ctx->program->dev.has_packed_fmask)
-            tmp_dst = unpack_packed_fmask(ctx, tmp_dst, resource);
 
          if (dst.regClass() == s1) {
             Temp is_not_null = bld.sopc(aco_opcode::s_cmp_lg_u32, bld.def(s1, scc), Operand::zero(),

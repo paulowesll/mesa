@@ -358,18 +358,13 @@ ac_build_gfx10_fmask_descriptor(const enum amd_gfx_level gfx_level, const struct
    }
 #undef FMASK
 
-   /* Xclipse has no FMASK formats (their numbers are ASTC there): read the raw FMASK elements. */
-   if (state->uint_format) {
-      const enum pipe_format pf =
-         format == V_008F0C_GFX10_FORMAT_FMASK16_S8_F2 || format == V_008F0C_GFX10_FORMAT_FMASK16_S16_F1
-            ? PIPE_FORMAT_R16_UINT
-         : format == V_008F0C_GFX10_FORMAT_FMASK32_S8_F4 || format == V_008F0C_GFX10_FORMAT_FMASK32_S8_F8 ||
-               format == V_008F0C_GFX10_FORMAT_FMASK32_S16_F2
-            ? PIPE_FORMAT_R32_UINT
-         : format == V_008F0C_GFX10_FORMAT_FMASK64_S16_F4 || format == V_008F0C_GFX10_FORMAT_FMASK64_S16_F8
-            ? PIPE_FORMAT_R32G32_UINT
-            : PIPE_FORMAT_R8_UINT;
-      format = ac_get_gfx10_format_table(gfx_level)[pf].img_format;
+   /* Xclipse numbers the FMASK formats of 2 and 4 samples 96 and 97, in a gap of the GFX11 table
+    * (the GFX10 numbers select ASTC formats there), as the vendor driver's descriptors show. They
+    * return 4 bits per sample and read CMASK when compression is enabled, as on GFX10.3.
+    */
+   if (state->xclipse_format) {
+      assert(format == V_008F0C_GFX10_FORMAT_FMASK8_S2_F2 || format == V_008F0C_GFX10_FORMAT_FMASK8_S4_F4);
+      format = format == V_008F0C_GFX10_FORMAT_FMASK8_S2_F2 ? 96 : 97;
    }
 
    desc[0] = (va >> 8) | surf->fmask_tile_swizzle;
@@ -378,17 +373,11 @@ ac_build_gfx10_fmask_descriptor(const enum amd_gfx_level gfx_level, const struct
              S_00A004_WIDTH_LO(state->width - 1);
    desc[2] = S_00A008_WIDTH_HI((state->width - 1) >> 2) |
              S_00A008_HEIGHT(state->height - 1) |
-             S_00A008_RESOURCE_LEVEL(1);
-   /* With raw elements, DST_SEL_W tells the shader the bits per sample (see ACO's unpack_packed_fmask):
-    * 1 for 2 samples, 2 for 4, 4 for 8.
-    */
-   const unsigned sel_w = !state->uint_format || state->num_samples >= 8 ? V_008F1C_SQ_SEL_X
-                          : state->num_samples == 4                    ? V_008F1C_SQ_SEL_1
-                                                                       : V_008F1C_SQ_SEL_0;
+             S_00A008_RESOURCE_LEVEL(gfx_level < GFX11);
    desc[3] = S_00A00C_DST_SEL_X(V_008F1C_SQ_SEL_X) |
              S_00A00C_DST_SEL_Y(V_008F1C_SQ_SEL_X) |
              S_00A00C_DST_SEL_Z(V_008F1C_SQ_SEL_X) |
-             S_00A00C_DST_SEL_W(sel_w) |
+             S_00A00C_DST_SEL_W(V_008F1C_SQ_SEL_X) |
              S_00A00C_SW_MODE(surf->u.gfx9.color.fmask_swizzle_mode) |
              S_00A00C_TYPE(state->type);
    desc[4] = S_00A010_DEPTH_GFX10(state->last_layer) | S_00A010_BASE_ARRAY(state->first_layer);
@@ -408,7 +397,7 @@ ac_build_gfx10_fmask_descriptor(const enum amd_gfx_level gfx_level, const struct
 void
 ac_build_fmask_descriptor(const enum amd_gfx_level gfx_level, const struct ac_fmask_state *state, uint32_t desc[8])
 {
-   assert(gfx_level < GFX11 || state->uint_format);
+   assert(gfx_level < GFX11 || state->xclipse_format);
 
    if (gfx_level >= GFX10) {
       ac_build_gfx10_fmask_descriptor(gfx_level, state, desc);
