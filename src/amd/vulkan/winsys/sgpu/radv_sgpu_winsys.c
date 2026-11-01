@@ -207,6 +207,19 @@ radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_wi
       goto fail;
    }
 
+   /* Every logical device opens the GPU again, but libdrm returns the device of the first winsys of
+    * the process, whose DRM file owns the GEM handles and contexts: syncobjs and every other ioctl
+    * must use that file too. With its own file, a second VkDevice in the process had all its
+    * submissions rejected (EINVAL).
+    */
+   const int own_fd = ws->fd;
+   ws->fd = fcntl(amdgpu_device_get_fd(ws->device), F_DUPFD_CLOEXEC, 0);
+   close(own_fd);
+   if (ws->fd < 0) {
+      amdgpu_device_deinitialize(ws->device);
+      goto fail;
+   }
+
    ws->sync_provider = util_sync_provider_drm(ws->fd);
    if (!ws->sync_provider) {
       amdgpu_device_deinitialize(ws->device);
