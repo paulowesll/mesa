@@ -301,8 +301,11 @@ radv_use_dcc_for_image_early(struct radv_device *device, struct radv_image *imag
    if (pdev->drirc.debug.disable_dcc_stores && (image->vk.usage & VK_IMAGE_USAGE_2_STORAGE_BIT_KHR))
       return false;
 
-   /* DCC MSAA can't work on GFX10.3 and earlier without FMASK. */
-   if (image->vk.samples > 1 && pdev->info.gfx_level < GFX11 && (RADV_DEBUG(instance, NO_FMASK)))
+   /* DCC MSAA can't work on GFX10.3 and earlier without FMASK (nor on Xclipse, whose colour block
+    * compresses MSAA like GFX10.3).
+    */
+   if (image->vk.samples > 1 && (pdev->info.gfx_level < GFX11 || pdev->info.is_xclipse) &&
+       (RADV_DEBUG(instance, NO_FMASK)))
       return false;
 
    return radv_are_formats_dcc_compatible(pdev, pCreateInfo->pNext, format, image->vk.create_flags, sign_reinterpret);
