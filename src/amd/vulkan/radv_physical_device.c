@@ -198,7 +198,10 @@ radv_filter_minmax_enabled(const struct radv_physical_device *pdev)
 static bool
 radv_cooperative_matrix_enabled(const struct radv_physical_device *pdev)
 {
-   return pdev->info.gfx_level >= GFX11 && !pdev->use_llvm;
+   /* Xclipse has no working WMMA: every matrix multiply-add test of the CTS failed. The vendor
+    * driver does not expose cooperative matrices either.
+    */
+   return pdev->info.gfx_level >= GFX11 && !pdev->use_llvm && !pdev->info.is_xclipse;
 }
 
 static bool
