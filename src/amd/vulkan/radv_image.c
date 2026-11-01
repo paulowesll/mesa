@@ -400,12 +400,6 @@ radv_use_tc_compat_cmask_for_image(struct radv_device *device, struct radv_image
    if (pdev->info.gfx_level < GFX8)
       return false;
 
-   /* The texture unit of Xclipse does not read CMASK: MSAA resolves of fast-cleared tiles were
-    * wrong. FMASK is decompressed before shader reads instead.
-    */
-   if (pdev->info.is_xclipse)
-      return false;
-
    /* GFX9 has issues when sample count is greater than 2 */
    if (pdev->info.gfx_level == GFX9 && image->vk.samples > 2)
       return false;
