@@ -235,8 +235,10 @@ radv_use_dcc_for_image_early(struct radv_device *device, struct radv_image *imag
    }
 
    if (pdev->info.is_xclipse) {
-      /* MSAA resolves of DCC images are wrong. */
-      if (pCreateInfo->samples > 1)
+      /* MSAA DCC needs FMASK, as on GFX10.3 (without it resolves were wrong), which Xclipse only
+       * uses up to 4 samples.
+       */
+      if (pCreateInfo->samples > 4)
          return false;
 
       /* The vendor never compresses 8bpp targets, and blending onto a compressed R8 target loses

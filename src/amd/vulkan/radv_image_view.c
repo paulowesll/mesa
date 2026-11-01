@@ -437,7 +437,10 @@ radv_initialise_color_surface(struct radv_device *device, struct radv_color_buff
       .num_samples = iview->image->vk.samples,
       .fmask_enabled = radv_image_has_fmask(iview->image),
       .cmask_enabled = radv_image_has_cmask(iview->image),
-      .fast_clear_enabled = !(RADV_DEBUG(instance, NO_FAST_CLEARS)),
+      /* Xclipse fast clears through DCC only: CMASK colour fast clears hung its CB, and the vendor
+       * driver leaves CB_COLOR_INFO.FAST_CLEAR off.
+       */
+      .fast_clear_enabled = !(RADV_DEBUG(instance, NO_FAST_CLEARS)) && !pdev->info.is_xclipse,
       .tc_compat_cmask_enabled = radv_image_is_tc_compat_cmask(iview->image),
       .dcc_enabled = radv_dcc_enabled(iview->image, iview->vk.base_mip_level) &&
                      (pdev->info.gfx_level >= GFX11 || !iview->disable_dcc_mrt),
