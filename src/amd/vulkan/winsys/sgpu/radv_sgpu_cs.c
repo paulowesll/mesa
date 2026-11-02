@@ -772,6 +772,10 @@ fail:
 struct radv_sgpu_submission {
    uint64_t stamp;
 
+   /* The route of the submission (its last IB, the gang leader). */
+   enum amd_ip_type leader_ip;
+   int leader_ring;
+
    struct drm_amdgpu_cs_chunk_ib *ibs;
    unsigned num_ibs;
    unsigned max_ibs;
@@ -828,9 +832,14 @@ radv_sgpu_submission_add_bo(struct radv_sgpu_submission *s, struct radeon_winsys
 }
 
 static bool
-radv_sgpu_submission_add_cs(struct radv_sgpu_submission *s, struct ac_cmdbuf *base, int ring, uint32_t flags)
+radv_sgpu_submission_add_cs(struct radv_sgpu_submission *s, struct ac_cmdbuf *base, uint32_t flags)
 {
    struct radv_sgpu_cs *cs = radv_sgpu_cs(base);
+   /* Gang followers (task shaders on a compute ring) take a ring of their own IP: the graphics
+    * family has more queues than there are compute rings.
+    */
+   const unsigned follower_rings = MAX2(cs->ws->info.ip[cs->ip_type].num_queues, 1);
+   const int ring = cs->ip_type == s->leader_ip ? s->leader_ring : s->leader_ring % follower_rings;
 
    if (cs->status != VK_SUCCESS || !cs->finalized)
       return false;
@@ -868,11 +877,11 @@ radv_sgpu_submission_add_cs(struct radv_sgpu_submission *s, struct ac_cmdbuf *ba
 }
 
 static bool
-radv_sgpu_submission_add_streams(struct radv_sgpu_submission *s, struct ac_cmdbuf **cs, unsigned count, int ring,
+radv_sgpu_submission_add_streams(struct radv_sgpu_submission *s, struct ac_cmdbuf **cs, unsigned count,
                                  uint32_t flags)
 {
    for (unsigned i = 0; i < count; i++) {
-      if (!radv_sgpu_submission_add_cs(s, cs[i], ring, flags))
+      if (!radv_sgpu_submission_add_cs(s, cs[i], flags))
          return false;
    }
    return true;
@@ -887,10 +896,11 @@ radv_sgpu_submission_build(struct radv_sgpu_ctx *ctx, struct radv_sgpu_submissio
 {
    static uint64_t stamp;
    struct radv_sgpu_winsys *ws = ctx->ws;
-   const int ring = submit->queue_index;
    bool valid = true;
 
    s->stamp = ++stamp;
+   s->leader_ip = submit->ip_type;
+   s->leader_ring = submit->queue_index;
 
    list_for_each_entry (struct radv_sgpu_bo, bo, &ws->resident_bos, resident_link) {
       if (!radv_sgpu_submission_add_bo(s, &bo->base))
@@ -905,13 +915,17 @@ radv_sgpu_submission_build(struct radv_sgpu_ctx *ctx, struct radv_sgpu_submissio
                               (submit->secure ? AMDGPU_IB_FLAGS_SECURE : 0);
 
    for (unsigned i = 0; i < submit->cs_count; i++) {
-      if (!radv_sgpu_submission_add_streams(s, i ? submit->continue_preamble_cs : submit->initial_preamble_cs,
-                                            i ? submit->continue_preamble_count : submit->initial_preamble_count,
-                                            ring, flags) ||
-          !radv_sgpu_submission_add_cs(s, submit->cs_array[i], ring, cmd_flags))
+      /* A gang follower comes right before its leader and shares its preambles. */
+      const bool starts_group = !i || radv_sgpu_cs(submit->cs_array[i - 1])->ip_type == submit->ip_type;
+
+      if ((starts_group &&
+           !radv_sgpu_submission_add_streams(s, i ? submit->continue_preamble_cs : submit->initial_preamble_cs,
+                                             i ? submit->continue_preamble_count : submit->initial_preamble_count,
+                                             flags)) ||
+          !radv_sgpu_submission_add_cs(s, submit->cs_array[i], cmd_flags))
          return false;
    }
-   if (!radv_sgpu_submission_add_streams(s, submit->postamble_cs, submit->postamble_count, ring, 0))
+   if (!radv_sgpu_submission_add_streams(s, submit->postamble_cs, submit->postamble_count, 0))
       return false;
    if (!s->num_ibs || s->num_ibs > SGPU_MAX_SPLIT_IB * 8)
       return false;
