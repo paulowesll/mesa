@@ -4007,7 +4007,9 @@ radv_emit_ps_inputs(struct radv_cmd_buffer *cmd_buffer)
    const struct radv_shader *ps = cmd_buffer->state.shaders[MESA_SHADER_FRAGMENT];
    const struct radv_shader *last_vgt_shader = cmd_buffer->state.last_vgt_shader;
    const struct radv_vs_output_info *outinfo = &last_vgt_shader->info.outinfo;
-   const bool gfx11plus = pdev->info.gfx_level >= GFX11;
+   /* Xclipse has no attribute ring: per-primitive parameters are exported and read as on GFX10.3. */
+   const bool gfx103_params = pdev->info.gfx_level == GFX10_3 || pdev->info.is_xclipse;
+   const bool gfx11plus = pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse;
    const enum radv_ps_in_type per_prim = gfx11plus ? radv_ps_in_per_prim_gfx11 : radv_ps_in_per_prim_gfx103;
    struct radv_cmd_stream *cs = cmd_buffer->cs;
    unsigned num_per_primitive_params = 0;
@@ -4052,7 +4054,7 @@ radv_emit_ps_inputs(struct radv_cmd_buffer *cmd_buffer)
       radeon_opt_set_context_regn(R_028664_SPI_PS_INPUT_CNTL_0, ps_input_cntl, cs->tracked_regs.spi_ps_input_cntl,
                                   ps_offset);
    } else {
-      if (pdev->info.gfx_level == GFX10_3) {
+      if (gfx103_params) {
          /* NUM_INTERP / NUM_PRIM_INTERP separately contain
           * the number of per-vertex and per-primitive PS input attributes.
           * These are only exactly known here so couldn't be precomputed.

@@ -2114,9 +2114,9 @@ radv_precompute_registers_hw_fs(struct radv_device *device, struct radv_shader *
       regs->ps.spi_ps_in_control = S_0286D8_PS_W32_EN(info->wave_size == 32) | S_0286D8_PARAM_GEN(param_gen);
 
       /* Can't precompute NUM_INTERP on GFX10.3 because per-primititve attributes
-       * are tracked separately in NUM_PRIM_INTERP.
+       * are tracked separately in NUM_PRIM_INTERP. Xclipse exports parameters like GFX10.3.
        */
-      if (pdev->info.gfx_level != GFX10_3) {
+      if (pdev->info.gfx_level != GFX10_3 && !pdev->info.is_xclipse) {
          regs->ps.spi_ps_in_control |= S_0286D8_NUM_INTERP(info->ps.num_inputs);
       }
 

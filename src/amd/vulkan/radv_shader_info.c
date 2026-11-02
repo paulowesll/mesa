@@ -488,8 +488,9 @@ radv_set_vs_output_param(enum amd_gfx_level gfx_level, bool is_xclipse, const st
 
    /* The HW always assumes that there is at least 1 per-vertex param.
     * so if there aren't any, we have to offset per-primitive params by 1.
+    * Not on Xclipse, which exports parameters like GFX10.3 (as its vendor driver does).
     */
-   const unsigned extra_offset = !!(total_param_exports == 0 && gfx_level >= GFX11);
+   const unsigned extra_offset = !!(total_param_exports == 0 && gfx_level >= GFX11 && !is_xclipse);
 
    if (implicit_prim_id_per_prim) {
       /* Mark the primitive ID as output when it's implicitly exported by VS. */
