@@ -3913,7 +3913,7 @@ radv_emit_mesh_shader(struct radv_cmd_buffer *cmd_buffer)
    radeon_set_uconfig_reg_idx(&pdev->info, R_030908_VGT_PRIMITIVE_TYPE, 1, V_008958_DI_PT_POINTLIST);
    radeon_end();
 
-   if (pdev->info.gfx_level >= GFX11)
+   if (pdev->info.compiler_info.has_mesh_fast_launch_2)
       radv_gfx11_emit_meshlet(cmd_buffer, ms);
 
    radv_emit_vgt_gs_out(cmd_buffer, gs_out);
@@ -4231,7 +4231,7 @@ radv_emit_vgt_shader_config_gfx6(struct radv_cmd_buffer *cmd_buffer, const struc
       stages |= S_028B54_ES_EN(V_028B54_ES_STAGE_REAL) | S_028B54_GS_EN(1);
    } else if (key->mesh) {
       assert(!key->ngg_passthrough);
-      unsigned gs_fast_launch = pdev->info.gfx_level >= GFX11 ? 2 : 1;
+      unsigned gs_fast_launch = pdev->info.compiler_info.has_mesh_fast_launch_2 ? 2 : 1;
       stages |=
          S_028B54_GS_EN(1) | S_028B54_GS_FAST_LAUNCH(gs_fast_launch) | S_028B54_NGG_WAVE_ID_EN(key->ngg_wave_id_en);
    } else if (key->ngg) {
@@ -11890,13 +11890,14 @@ radv_cs_emit_indirect_mesh_draw_packet(struct radv_cmd_buffer *cmd_buffer, uint3
    uint32_t draw_id_enable = !!cmd_buffer->state.uses_drawid;
    uint32_t draw_id_reg = !draw_id_enable ? 0 : (base_reg + (xyz_dim_enable ? 12 : 0) - SI_SH_REG_OFFSET) >> 2;
 
-   uint32_t mode1_enable = pdev->info.gfx_level < GFX11;
+   const bool fast_launch_2 = pdev->info.compiler_info.has_mesh_fast_launch_2;
+   uint32_t mode1_enable = !fast_launch_2;
 
    radeon_begin(cs);
    radeon_emit(PKT3(PKT3_DISPATCH_MESH_INDIRECT_MULTI, 7, predicating) | PKT3_RESET_FILTER_CAM_S(1));
    radeon_emit(0); /* data_offset */
    radeon_emit(S_4C1_XYZ_DIM_REG(xyz_dim_reg) | S_4C1_DRAW_INDEX_REG(draw_id_reg));
-   if (pdev->info.gfx_level >= GFX11)
+   if (fast_launch_2)
       radeon_emit(S_4C2_DRAW_INDEX_ENABLE(draw_id_enable) | S_4C2_COUNT_INDIRECT_ENABLE(!!count_va) |
                   S_4C2_XYZ_DIM_ENABLE(xyz_dim_enable) | S_4C2_MODE1_ENABLE(mode1_enable) |
                   S_4C2_THREAD_TRACE_MARKER_ENABLE(sqtt_en));
@@ -11981,14 +11982,15 @@ radv_cs_emit_dispatch_taskmesh_gfx_packet(const struct radv_device *device, cons
 
    uint32_t xyz_dim_en = mesh_shader->info.cs.uses_grid_size;
    uint32_t xyz_dim_reg = !xyz_dim_en ? 0 : (cmd_state->vtx_base_sgpr - SI_SH_REG_OFFSET) >> 2;
-   uint32_t mode1_en = pdev->info.gfx_level < GFX11;
+   const bool fast_launch_2 = pdev->info.compiler_info.has_mesh_fast_launch_2;
+   uint32_t mode1_en = !fast_launch_2;
    uint32_t linear_dispatch_en = cmd_state->shaders[MESA_SHADER_TASK]->info.cs.linear_taskmesh_dispatch;
    const bool sqtt_en = !!device->sqtt.bo;
 
    radeon_begin(cs);
    radeon_emit(PKT3(PKT3_DISPATCH_TASKMESH_GFX, 2, predicating) | PKT3_RESET_FILTER_CAM_S(1));
    radeon_emit(S_4D0_RING_ENTRY_REG(ring_entry_reg) | S_4D0_XYZ_DIM_REG(xyz_dim_reg));
-   if (pdev->info.gfx_level >= GFX11)
+   if (fast_launch_2)
       radeon_emit(S_4D1_XYZ_DIM_ENABLE(xyz_dim_en) | S_4D1_MODE1_ENABLE(mode1_en) |
                   S_4D1_LINEAR_DISPATCH_ENABLE(linear_dispatch_en) | S_4D1_THREAD_TRACE_MARKER_ENABLE(sqtt_en));
    else
@@ -12321,7 +12323,7 @@ radv_emit_direct_mesh_draw_packet(struct radv_cmd_buffer *cmd_buffer, uint32_t x
 
    radv_emit_userdata_mesh(cmd_buffer, x, y, z);
 
-   if (pdev->info.gfx_level >= GFX11) {
+   if (pdev->info.compiler_info.has_mesh_fast_launch_2) {
       if (!view_mask) {
          radv_cs_emit_mesh_dispatch_packet(cmd_buffer, x, y, z);
       } else {

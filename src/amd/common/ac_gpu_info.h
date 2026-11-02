@@ -150,6 +150,11 @@ struct ac_compiler_info {
    uint32_t local_invocation_ids_packed : 1;
    /* Whether the chip supports FMASK. */
    uint32_t has_fmask : 1;
+   /* Whether mesh shaders use fast launch mode 2 (GFX11+): DISPATCH_MESH_DIRECT, the MESHLET
+    * registers and local invocation IDs in VGPR0. Otherwise they use mode 1 (GFX10.3): one
+    * workgroup per auto-indexed "vertex", with the workgroup ID computed in the shader.
+    */
+   uint32_t has_mesh_fast_launch_2 : 1;
    /* Whether 3D textures, cubemap textures, border colors, and mipmapping are supported. (CDNA) */
    uint32_t has_3d_cube_border_color_mipmap : 1;
 

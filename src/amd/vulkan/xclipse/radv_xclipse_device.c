@@ -218,6 +218,8 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
    info->compiler_info.has_attr_ring = false;
    info->compiler_info.has_attr_ring_wait_bug = false;
    info->compiler_info.has_ngg_passthru_no_msg = false;
+   /* Mesh shaders launch GFX10.3-style (fast launch mode 1), as the vendor driver draws them. */
+   info->compiler_info.has_mesh_fast_launch_2 = false;
 
    /* Fields that ac_query_gpu_info derives for amdgpu devices. */
    info->max_scratch_waves = MAX2(32 * info->max_good_cu_per_sa * info->max_sa_per_se * info->num_se, 32);

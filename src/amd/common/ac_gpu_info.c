@@ -240,7 +240,7 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
 {
    /* We use ac_compiler_info for shader cache keys, so make sure there is no padding. */
    STATIC_ASSERT(sizeof(enum amd_gfx_level) == 4);
-   STATIC_ASSERT(sizeof(struct ac_compiler_info) == 60);
+   STATIC_ASSERT(sizeof(struct ac_compiler_info) == 64);
 
    struct ac_compiler_info *out = &info->compiler_info;
 
@@ -350,6 +350,7 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
    out->local_invocation_ids_packed =
       info->gfx_level >= GFX11 || (!info->has_graphics && info->family >= CHIP_MI200);
    out->has_fmask = info->gfx_level <= GFX10_3;
+   out->has_mesh_fast_launch_2 = info->gfx_level >= GFX11;
 
    out->has_3d_cube_border_color_mipmap = info->has_graphics || info->family == CHIP_MI100;
 
@@ -2162,6 +2163,7 @@ void ac_print_gpu_info(FILE *f, const struct radeon_info *info, int fd)
    fprintf(f, "    has_image_bvh_intersect_ray = %i\n", info->compiler_info.has_image_bvh_intersect_ray);
    fprintf(f, "    has_ngg_passthru_no_msg = %i\n", info->compiler_info.has_ngg_passthru_no_msg);
    fprintf(f, "    local_invocation_ids_packed = %i\n", info->compiler_info.local_invocation_ids_packed);
+   fprintf(f, "    has_mesh_fast_launch_2 = %i\n", info->compiler_info.has_mesh_fast_launch_2);
    fprintf(f, "    has_3d_cube_border_color_mipmap = %i\n", info->compiler_info.has_3d_cube_border_color_mipmap);
    fprintf(f, "    conformant_trunc_coord = %i\n", info->compiler_info.conformant_trunc_coord);
    fprintf(f, "    has_attr_ring = %i\n", info->compiler_info.has_attr_ring);

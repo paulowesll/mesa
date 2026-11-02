@@ -1414,7 +1414,7 @@ ac_nir_lower_ngg_mesh(nir_shader *shader, const ac_nir_lower_ngg_options *option
    nir_custom_divergence_analysis(shader,
       api_workgroup_size <= options->wave_size ? 0 : nir_divergence_across_subgroups);
 
-   bool fast_launch_2 = options->compiler_info->gfx_level >= GFX11;
+   bool fast_launch_2 = options->compiler_info->has_mesh_fast_launch_2;
 
    unsigned hw_workgroup_size = options->max_workgroup_size;
    lower_ngg_ms_state state = {
