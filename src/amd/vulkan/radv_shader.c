@@ -1999,6 +1999,14 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, struct radv_shader 
    regs->ngg.ge_ngg_subgrp_cntl = S_028B4C_PRIM_AMP_FACTOR(info->ngg_info.prim_amp_factor) |
                                   S_028B4C_THDS_PER_SUBGRP(pdev->info.is_xclipse ? 256 : 0);
 
+   /* For mesh shaders, the vendor driver of Xclipse sets both fields to the HW workgroup size (the
+    * largest of the API workgroup size and the vertex and primitive counts); the GPU hung with 256
+    * threads and the primitive count once a workgroup emitted more vertices than it has invocations.
+    */
+   if (pdev->info.is_xclipse && info->stage == MESA_SHADER_MESH)
+      regs->ngg.ge_ngg_subgrp_cntl =
+         S_028B4C_PRIM_AMP_FACTOR(info->workgroup_size) | S_028B4C_THDS_PER_SUBGRP(info->workgroup_size);
+
    regs->vgt_gs_instance_cnt = S_028B90_CNT(gs_num_invocations) | S_028B90_ENABLE(gs_num_invocations > 1) |
                                S_028B90_EN_MAX_VERT_OUT_PER_GS_INSTANCE(info->ngg_info.max_vert_out_per_gs_instance);
 
