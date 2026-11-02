@@ -930,6 +930,24 @@ radv_sgpu_submission_build(struct radv_sgpu_ctx *ctx, struct radv_sgpu_submissio
    if (!s->num_ibs || s->num_ibs > SGPU_MAX_SPLIT_IB * 8)
       return false;
 
+   /* In a gang, the follower IBs (task shaders on a compute ring) go first, each IP in its own
+    * order, as the vendor driver sends them: with the graphics IBs first, the kernel started the
+    * compute job of 1-3% of the gangs about 2.6 s late.
+    */
+   if (s->ibs[s->num_ibs - 1].ip_type == s->leader_ip) {
+      struct drm_amdgpu_cs_chunk_ib leader_ibs[SGPU_MAX_SPLIT_IB * 8];
+      unsigned num_followers = 0, num_leader = 0;
+
+      for (unsigned i = 0; i < s->num_ibs; i++) {
+         if (s->ibs[i].ip_type == s->leader_ip)
+            leader_ibs[num_leader++] = s->ibs[i];
+         else
+            s->ibs[num_followers++] = s->ibs[i];
+      }
+      if (num_followers)
+         memcpy(s->ibs + num_followers, leader_ibs, num_leader * sizeof(*leader_ibs));
+   }
+
    for (unsigned i = 0; i < s->num_ibs; i++) {
       s->chunks[s->num_chunks++] = (struct drm_amdgpu_cs_chunk){
          .chunk_id = AMDGPU_CHUNK_ID_IB,
