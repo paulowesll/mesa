@@ -53,4 +53,12 @@
 #define MGFX4_CU_PAIR_REG(rsrc3_reg)      (0x30000000 | (((rsrc3_reg) - SI_SH_REG_OFFSET) >> 2))
 #define MGFX4_CU_PAIR_RSRC4_BIT           (1u << 31)
 
+/* Mesh and task shader draw packets have other numbers on MGFX4; their bodies are the GFX10.3
+ * ones (no GFX11 mode/enable bits). DISPATCH_TASK_STATE_INIT (0xA9) and
+ * DISPATCH_TASKMESH_DIRECT_ACE (0xAA) keep their numbers.
+ */
+#define PKT3_MGFX4_DISPATCH_MESH_INDIRECT_MULTI         0x6B
+#define PKT3_MGFX4_DISPATCH_TASKMESH_GFX                0x6C
+#define PKT3_MGFX4_DISPATCH_TASKMESH_INDIRECT_MULTI_ACE 0xAB
+
 #endif /* AC_MGFX4_REGS_H */

@@ -11892,9 +11892,11 @@ radv_cs_emit_indirect_mesh_draw_packet(struct radv_cmd_buffer *cmd_buffer, uint3
 
    const bool fast_launch_2 = pdev->info.compiler_info.has_mesh_fast_launch_2;
    uint32_t mode1_enable = !fast_launch_2;
+   const unsigned opcode =
+      pdev->info.is_xclipse ? PKT3_MGFX4_DISPATCH_MESH_INDIRECT_MULTI : PKT3_DISPATCH_MESH_INDIRECT_MULTI;
 
    radeon_begin(cs);
-   radeon_emit(PKT3(PKT3_DISPATCH_MESH_INDIRECT_MULTI, 7, predicating) | PKT3_RESET_FILTER_CAM_S(1));
+   radeon_emit(PKT3(opcode, 7, predicating) | PKT3_RESET_FILTER_CAM_S(1));
    radeon_emit(0); /* data_offset */
    radeon_emit(S_4C1_XYZ_DIM_REG(xyz_dim_reg) | S_4C1_DRAW_INDEX_REG(draw_id_reg));
    if (fast_launch_2)
@@ -11953,8 +11955,12 @@ radv_cs_emit_dispatch_taskmesh_indirect_multi_ace_packet(const struct radv_devic
    const uint32_t draw_id_reg = radv_get_user_sgpr(task_shader, AC_UD_CS_TASK_DRAW_ID);
    const bool sqtt_en = !!device->sqtt.bo;
 
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   const unsigned opcode = pdev->info.is_xclipse ? PKT3_MGFX4_DISPATCH_TASKMESH_INDIRECT_MULTI_ACE
+                                                 : PKT3_DISPATCH_TASKMESH_INDIRECT_MULTI_ACE;
+
    radeon_begin(ace_cs);
-   radeon_emit(PKT3(PKT3_DISPATCH_TASKMESH_INDIRECT_MULTI_ACE, 9, 0) | PKT3_SHADER_TYPE_S(1));
+   radeon_emit(PKT3(opcode, 9, 0) | PKT3_SHADER_TYPE_S(1));
    radeon_emit(data_va);
    radeon_emit(data_va >> 32);
    radeon_emit(S_AD2_RING_ENTRY_REG(ring_entry_reg));
@@ -11986,9 +11992,10 @@ radv_cs_emit_dispatch_taskmesh_gfx_packet(const struct radv_device *device, cons
    uint32_t mode1_en = !fast_launch_2;
    uint32_t linear_dispatch_en = cmd_state->shaders[MESA_SHADER_TASK]->info.cs.linear_taskmesh_dispatch;
    const bool sqtt_en = !!device->sqtt.bo;
+   const unsigned opcode = pdev->info.is_xclipse ? PKT3_MGFX4_DISPATCH_TASKMESH_GFX : PKT3_DISPATCH_TASKMESH_GFX;
 
    radeon_begin(cs);
-   radeon_emit(PKT3(PKT3_DISPATCH_TASKMESH_GFX, 2, predicating) | PKT3_RESET_FILTER_CAM_S(1));
+   radeon_emit(PKT3(opcode, 2, predicating) | PKT3_RESET_FILTER_CAM_S(1));
    radeon_emit(S_4D0_RING_ENTRY_REG(ring_entry_reg) | S_4D0_XYZ_DIM_REG(xyz_dim_reg));
    if (fast_launch_2)
       radeon_emit(S_4D1_XYZ_DIM_ENABLE(xyz_dim_en) | S_4D1_MODE1_ENABLE(mode1_en) |
