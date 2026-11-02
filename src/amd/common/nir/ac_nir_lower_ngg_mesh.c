@@ -850,9 +850,10 @@ ms_prim_exp_arg_ch2(nir_builder *b, uint64_t outputs_mask, lower_ngg_ms_state *s
        */
       prim_exp_arg_ch2 = nir_imm_int(b, 0);
 
+      /* Xclipse encodes the second channel as GFX10.3 does. */
       if (outputs_mask & VARYING_BIT_LAYER) {
          nir_def *layer = nir_ishl_imm(b, s->out.outputs[VARYING_SLOT_LAYER][0],
-                                       s->ac->gfx_level >= GFX11 ? 0 : 17);
+                                       s->ac->gfx_level >= GFX11 && !s->ac->is_xclipse ? 0 : 17);
          prim_exp_arg_ch2 = nir_ior(b, prim_exp_arg_ch2, layer);
       }
 

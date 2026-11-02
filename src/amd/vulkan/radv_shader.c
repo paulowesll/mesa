@@ -924,8 +924,12 @@ radv_shader_spirv_to_nir(const struct radv_compiler_info *compiler_info, struct 
    if ((nir->info.stage == MESA_SHADER_VERTEX || nir->info.stage == MESA_SHADER_GEOMETRY ||
         nir->info.stage == MESA_SHADER_MESH) &&
        nir->info.outputs_written & VARYING_BIT_PRIMITIVE_SHADING_RATE) {
-      /* Lower primitive shading rate to match HW requirements. */
-      NIR_PASS(_, nir, radv_nir_lower_primitive_shading_rate, compiler_info->ac->gfx_level);
+      /* Lower primitive shading rate to match HW requirements. The primitive export of Xclipse
+       * mesh shaders lays the rate out as GFX10.3 does (X and Y were swapped with the GFX11 order).
+       */
+      const enum amd_gfx_level rate_gfx_level =
+         compiler_info->ac->is_xclipse && nir->info.stage == MESA_SHADER_MESH ? GFX10_3 : compiler_info->ac->gfx_level;
+      NIR_PASS(_, nir, radv_nir_lower_primitive_shading_rate, rate_gfx_level);
    }
 
    /* Lower immutable/embedded sampler derefs to vec4. */
