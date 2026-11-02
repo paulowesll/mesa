@@ -2313,6 +2313,7 @@ struct DeviceInfo {
    bool has_rtz_cvt_pkrtz_fusion_bug = false;
    bool has_gl1_sa_scope_glc = false;
    bool needs_mem_ordered = false;
+   bool needs_ldsdir_valu_drain = false;
 
    int32_t scratch_global_offset_min;
    int32_t scratch_global_offset_max;

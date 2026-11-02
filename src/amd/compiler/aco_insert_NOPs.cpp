@@ -1248,6 +1248,8 @@ handle_lds_direct_valu_hazard(State& state, aco_ptr<Instruction>& instr)
     */
    if (instr->ldsdir().wait_vdst == 0)
       return 0; /* early exit */
+   if (state.program->dev.needs_ldsdir_valu_drain)
+      return 0;
 
    LdsDirectVALUHazardGlobalState global_state;
    global_state.wait_vdst = instr->ldsdir().wait_vdst;

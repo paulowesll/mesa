@@ -142,6 +142,11 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
       program->dev.needs_mem_ordered = true;
       /* Scratch is sized in 1 KiB units, as on GFX10 (see radeon_info). */
       program->dev.scratch_alloc_granule = 1024;
+      /* An older VALU write to the VGPR of LDS_PARAM_LOAD can still land after the load, although
+       * the va_vdst count that GFX11 needs since the last VALU use has passed: the input then reads
+       * the old register value. The vendor waits for every VALU before these loads.
+       */
+      program->dev.needs_ldsdir_valu_drain = true;
    }
 
    if (program->gfx_level >= GFX12) {
