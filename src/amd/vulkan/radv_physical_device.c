@@ -75,7 +75,14 @@ radv_taskmesh_enabled(const struct radv_physical_device *pdev)
    if (RADV_DEBUG(instance, NO_MESH_SHADER))
       return false;
 
-   return pdev->use_ngg && !pdev->use_llvm && pdev->info.gfx_level >= GFX10_3 && radv_compute_queue_enabled(pdev) &&
+   /* Task shaders run on a compute ring, in a gang submission with the graphics ring. Xclipse does
+    * not expose its compute rings as a queue family (the vendor driver has a single family), but
+    * they run task shaders as the vendor driver's do.
+    */
+   const bool has_compute_rings =
+      radv_compute_queue_enabled(pdev) || (pdev->info.is_xclipse && pdev->info.ip[AMD_IP_COMPUTE].num_queues);
+
+   return pdev->use_ngg && !pdev->use_llvm && pdev->info.gfx_level >= GFX10_3 && has_compute_rings &&
           !pdev->info.has_taskmesh_indirect0_bug;
 }
 
