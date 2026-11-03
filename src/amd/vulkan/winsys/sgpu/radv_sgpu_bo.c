@@ -573,7 +573,11 @@ radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned
                             enum radeon_bo_flag flags, uint64_t address, struct radeon_winsys_bo **out_bo)
 {
    const uint64_t prt_wa_bit = 1ull << ws->info.address_prt_wa_control_bit;
-   const bool emulate_sparse_residency = flags & RADEON_FLAG_EMULATE_SPARSE_RESIDENCY;
+   /* Sparse descriptor buffers are reached through 32-bit pointers: they get a VA in the 32-bit window,
+    * which leaves no room for the high alias of emulated residency.
+    */
+   const bool va_32bit = flags & RADEON_FLAG_32BIT;
+   const bool emulate_sparse_residency = (flags & RADEON_FLAG_EMULATE_SPARSE_RESIDENCY) && !va_32bit;
    uint64_t va = 0;
    int ret;
 
@@ -591,7 +595,7 @@ radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned
 
    /* The low alias is an ordinary VA; the high one is in the range reserved at creation. */
    if (amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, MAX2(alignment, 65536u),
-                              address & ~prt_wa_bit, &va, &bo->va, 0)) {
+                              address & ~prt_wa_bit, &va, &bo->va, va_32bit ? AMDGPU_VA_RANGE_32_BIT : 0)) {
       free(bo);
       return address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
    }
