@@ -236,6 +236,7 @@ radv_sgpu_winsys_create(int fd, const struct radeon_info *info, struct radeon_wi
    simple_mtx_init(&ws->lock, mtx_plain);
    simple_mtx_init(&ws->null_prt_lock, mtx_plain);
    list_inithead(&ws->resident_bos);
+   list_inithead(&ws->ctxs);
 
    ws->base.destroy = radv_sgpu_winsys_destroy;
    ws->base.query_value = radv_sgpu_query_value;

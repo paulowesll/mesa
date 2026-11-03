@@ -501,6 +501,8 @@ struct radv_sgpu_retention {
 struct radv_sgpu_ctx {
    struct radv_sgpu_winsys *ws;
    amdgpu_context_handle context;
+   /* Link in ws->ctxs (ws->lock). */
+   struct list_head link;
 
    /* Serializes submissions and the per-route state below. */
    simple_mtx_t lock;
@@ -577,12 +579,11 @@ radv_sgpu_retention_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu
  * error: it no longer runs, so its BOs are released like those of a completed one.
  */
 static void
-radv_sgpu_retire(struct radv_sgpu_ctx *ctx)
+radv_sgpu_retire_locked(struct radv_sgpu_ctx *ctx)
 {
    struct radv_sgpu_winsys *ws = ctx->ws;
    bool pending[SGPU_NUM_IPS][SGPU_MAX_RINGS] = {0};
 
-   simple_mtx_lock(&ws->lock);
    for (struct radv_sgpu_retention **link = &ctx->retentions; *link;) {
       struct radv_sgpu_retention *r = *link;
       const unsigned ip = r->fence.ip_type, ring = r->fence.ring;
@@ -611,7 +612,21 @@ radv_sgpu_retire(struct radv_sgpu_ctx *ctx)
          link = &r->next;
       }
    }
-   simple_mtx_unlock(&ws->lock);
+}
+
+static void
+radv_sgpu_retire(struct radv_sgpu_ctx *ctx)
+{
+   simple_mtx_lock(&ctx->ws->lock);
+   radv_sgpu_retire_locked(ctx);
+   simple_mtx_unlock(&ctx->ws->lock);
+}
+
+void
+radv_sgpu_retire_all_locked(struct radv_sgpu_winsys *ws)
+{
+   list_for_each_entry (struct radv_sgpu_ctx, ctx, &ws->ctxs, link)
+      radv_sgpu_retire_locked(ctx);
 }
 
 static uint32_t
@@ -1213,6 +1228,11 @@ radv_sgpu_ctx_create(struct radeon_winsys *_ws, enum radeon_ctx_priority priorit
    ctx->ws = ws;
    ctx->retentions_tail = &ctx->retentions;
    simple_mtx_init(&ctx->lock, mtx_plain);
+
+   simple_mtx_lock(&ws->lock);
+   list_addtail(&ctx->link, &ws->ctxs);
+   simple_mtx_unlock(&ws->lock);
+
    *out = (struct radeon_winsys_ctx *)ctx;
    return VK_SUCCESS;
 }
@@ -1229,6 +1249,7 @@ radv_sgpu_ctx_destroy(struct radeon_winsys_ctx *_ctx)
     * them under a possibly running IB.
     */
    simple_mtx_lock(&ws->lock);
+   list_del(&ctx->link);
    while (ctx->retentions) {
       struct radv_sgpu_retention *r = ctx->retentions;
       uint32_t expired = 0;

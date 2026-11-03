@@ -239,7 +239,13 @@ radv_sgpu_buffer_destroy(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo
    simple_mtx_lock(&ws->lock);
    radv_sgpu_bo_remove_resident_locked(bo);
 
-   /* An in-flight submission still reads it: the retirement of its last submission frees it. */
+   /* An in-flight submission still reads it: the retirement of its last submission frees it.
+    * Submissions retire lazily, so one the application already waited for may still hold it;
+    * retiring now gives the address range back at once, as an allocation at a captured address
+    * (capture/replay) right after the free requires.
+    */
+   if (bo->pending_submits)
+      radv_sgpu_retire_all_locked(ws);
    bo->destroyed = true;
    radv_sgpu_bo_release_destroyed_locked(ws, bo);
    simple_mtx_unlock(&ws->lock);

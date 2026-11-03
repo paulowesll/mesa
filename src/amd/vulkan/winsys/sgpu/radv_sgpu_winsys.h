@@ -30,10 +30,12 @@ struct radv_sgpu_winsys {
    struct util_sync_provider *sync_provider;
    int fd;
 
-   /* Protects BO lifetime (pending_submits), the resident list and allocated_gtt. */
+   /* Protects BO lifetime (pending_submits), the resident list, the context list and allocated_gtt. */
    simple_mtx_t lock;
    /* Non-local BOs made resident; they accompany every submission. */
    struct list_head resident_bos;
+   /* Every context of the winsys, whose submissions keep BOs alive. */
+   struct list_head ctxs;
    uint64_t allocated_gtt;
    /* Bump cursor of the capture/replay VA window. */
    uint64_t replay_va_cursor;
@@ -106,6 +108,8 @@ void radv_sgpu_ib_pool_finish(struct radv_sgpu_winsys *ws);
 
 /* Physical release of a BO whose submissions retired; ws->lock held. */
 void radv_sgpu_bo_release_destroyed_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo);
+/* Retires the completed submissions of every context; ws->lock held. */
+void radv_sgpu_retire_all_locked(struct radv_sgpu_winsys *ws);
 bool radv_sgpu_bo_get_kms_handle_locked(struct radv_sgpu_bo *bo, uint32_t *handle);
 
 #endif /* RADV_SGPU_WINSYS_H */
