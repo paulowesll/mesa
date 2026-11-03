@@ -28,9 +28,10 @@ radv_sgpu_process_allocated(void)
    return p_atomic_read(&radv_sgpu_process_gtt);
 }
 
-/* Start of the VA window of capture/replay BOs.  The vendor libdrm ignores
- * AMDGPU_VA_RANGE_REPLAYABLE, so without a separate window a replay's own allocations land on
- * the captured addresses.
+/* Start of the VA window of capture/replay BOs outside the 32-bit window, far above ordinary
+ * allocations, so that a replay's own allocations do not land on the captured addresses.  The
+ * 32-bit window and sparse buffers get the same separation from AMDGPU_VA_RANGE_REPLAYABLE, which
+ * makes libdrm search from the top of the range.
  */
 #define SGPU_REPLAY_VA_WINDOW 0x4000000000ull
 
@@ -110,6 +111,8 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
    /* Low 32-bit window: the device query reports address32_hi = 0. */
    if (flags & RADEON_FLAG_32BIT)
       va_flags |= AMDGPU_VA_RANGE_32_BIT;
+   if (flags & RADEON_FLAG_REPLAYABLE)
+      va_flags |= AMDGPU_VA_RANGE_REPLAYABLE;
 
    if ((flags & RADEON_FLAG_REPLAYABLE) && !address && !(flags & RADEON_FLAG_32BIT)) {
       const uint64_t base = align64(MAX2(ws->replay_va_cursor, SGPU_REPLAY_VA_WINDOW), alignment);
@@ -600,8 +603,10 @@ radv_sgpu_virtual_bo_create(struct radv_sgpu_winsys *ws, uint64_t size, unsigned
    const uint64_t alloc_size = align64(MAX2(size, 1), MAX2(alignment, 65536u));
 
    /* The low alias is an ordinary VA; the high one is in the range reserved at creation. */
+   const uint64_t va_flags =
+      (va_32bit ? AMDGPU_VA_RANGE_32_BIT : 0) | (flags & RADEON_FLAG_REPLAYABLE ? AMDGPU_VA_RANGE_REPLAYABLE : 0);
    if (amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, alloc_size, MAX2(alignment, 65536u),
-                              address & ~prt_wa_bit, &va, &bo->va, va_32bit ? AMDGPU_VA_RANGE_32_BIT : 0)) {
+                              address & ~prt_wa_bit, &va, &bo->va, va_flags)) {
       free(bo);
       return address ? VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
    }
