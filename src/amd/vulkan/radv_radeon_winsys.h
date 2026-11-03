@@ -263,6 +263,11 @@ struct radeon_winsys {
 
    VkResult (*buffer_make_resident)(struct radeon_winsys *ws, struct radeon_winsys_bo *bo, bool resident);
 
+   /* Optional: maps the BO a second time inside the 32-bit address window (address32_hi) on first use and
+    * returns that address, or 0 when it cannot.  The mapping lives as long as the BO.
+    */
+   uint64_t (*buffer_get_32bit_alias)(struct radeon_winsys *ws, struct radeon_winsys_bo *bo);
+
    VkResult (*ctx_create)(struct radeon_winsys *ws, enum radeon_ctx_priority priority, struct radeon_winsys_ctx **ctx);
    void (*ctx_destroy)(struct radeon_winsys_ctx *ctx);
 

@@ -171,6 +171,19 @@ radv_BindBufferMemory2(VkDevice _device, uint32_t bindInfoCount, const VkBindBuf
       buffer->vk.device_address = radv_buffer_get_va(mem->bo) + pBindInfos[i].memoryOffset;
       buffer->range = reqs.memoryRequirements.size;
 
+      /* Shaders reach descriptor buffers through 32-bit pointers.  Memory above the 32-bit window (of a
+       * type the requirements excluded, or imported from another allocator, as layers that allocate
+       * every mappable range themselves do) gets a second mapping inside it.
+       */
+      if ((buffer->vk.usage &
+           (VK_BUFFER_USAGE_2_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_2_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT |
+            VK_BUFFER_USAGE_2_DESCRIPTOR_HEAP_BIT_EXT)) &&
+          (buffer->vk.device_address >> 32) != pdev->info.address32_hi && device->ws->buffer_get_32bit_alias) {
+         const uint64_t alias = device->ws->buffer_get_32bit_alias(device->ws, mem->bo);
+         if (alias)
+            buffer->vk.device_address = alias + pBindInfos[i].memoryOffset;
+      }
+
       radv_rmv_log_buffer_bind(device, pBindInfos[i].buffer);
 
       vk_address_binding_report(&instance->vk, &buffer->vk.base, buffer->vk.device_address, buffer->range,

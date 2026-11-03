@@ -204,6 +204,10 @@ radv_sgpu_bo_release_locked(struct radv_sgpu_winsys *ws, struct radv_sgpu_bo *bo
       munmap(bo->fixed_map, bo->base.size);
    if (bo->cpu_mapped)
       amdgpu_bo_cpu_unmap(bo->bo);
+   if (bo->alias32_addr) {
+      amdgpu_bo_va_op(bo->bo, 0, bo->alloc_size, bo->alias32_addr, 0, AMDGPU_VA_OP_UNMAP);
+      amdgpu_va_range_free(bo->alias32_va);
+   }
    if (bo->va_mapped)
       amdgpu_bo_va_op(bo->bo, 0, bo->alloc_size, bo->base.va, 0, AMDGPU_VA_OP_UNMAP);
    if (bo->va)
@@ -326,6 +330,33 @@ radv_sgpu_buffer_unmap(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo, 
       bo->cpu_mapped = false;
    }
    simple_mtx_unlock(&ws->lock);
+}
+
+static uint64_t
+radv_sgpu_buffer_get_32bit_alias(struct radeon_winsys *_ws, struct radeon_winsys_bo *_bo)
+{
+   struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
+   struct radv_sgpu_bo *bo = radv_sgpu_bo(_bo);
+   amdgpu_va_handle va_handle = NULL;
+   uint64_t va = 0;
+
+   if (bo->base.is_virtual || !bo->bo)
+      return 0;
+
+   simple_mtx_lock(&ws->lock);
+   if (!bo->alias32_addr &&
+       !amdgpu_va_range_alloc(ws->device, amdgpu_gpu_va_range_general, bo->alloc_size, 4096, 0, &va, &va_handle,
+                              AMDGPU_VA_RANGE_32_BIT)) {
+      if (!amdgpu_bo_va_op(bo->bo, 0, bo->alloc_size, va, bo->vm_flags, AMDGPU_VA_OP_MAP)) {
+         bo->alias32_va = va_handle;
+         bo->alias32_addr = va;
+      } else {
+         amdgpu_va_range_free(va_handle);
+      }
+   }
+   va = bo->alias32_addr;
+   simple_mtx_unlock(&ws->lock);
+   return va;
 }
 
 static VkResult
@@ -660,6 +691,7 @@ radv_sgpu_bo_init_functions(struct radv_sgpu_winsys *ws)
    ws->base.buffer_map = radv_sgpu_buffer_map;
    ws->base.buffer_unmap = radv_sgpu_buffer_unmap;
    ws->base.buffer_from_ptr = radv_sgpu_buffer_from_ptr;
+   ws->base.buffer_get_32bit_alias = radv_sgpu_buffer_get_32bit_alias;
    ws->base.buffer_from_fd = radv_sgpu_buffer_from_fd;
    ws->base.buffer_get_fd = radv_sgpu_buffer_get_fd;
    ws->base.buffer_get_flags_from_fd = radv_sgpu_buffer_get_flags_from_fd;

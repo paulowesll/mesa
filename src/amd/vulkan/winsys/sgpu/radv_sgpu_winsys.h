@@ -67,6 +67,9 @@ struct radv_sgpu_bo {
    bool va_mapped;
    /* Sparse buffer with a low alias that scalar loads read (RADEON_FLAG_EMULATE_SPARSE_RESIDENCY). */
    bool emulate_sparse_residency;
+   /* Second mapping inside the 32-bit window, for descriptor buffers bound to memory above it. */
+   amdgpu_va_handle alias32_va;
+   uint64_t alias32_addr;
 
    void *cpu_map;
    bool cpu_mapped;
