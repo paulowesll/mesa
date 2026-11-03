@@ -37,6 +37,9 @@
 #include "vk_extensions.h"
 #include "vk_physical_device_features.h"
 
+/* The generation this port supports, the top byte of the chip revision: MGFX4, Xclipse 960. */
+#define XCLIPSE_SUPPORTED_GENERATION 4u
+
 /* Topology of Xclipse 960, for a kernel that does not report one. */
 #define XCLIPSE_NUM_SE              2u
 #define XCLIPSE_SA_PER_SE           2u
@@ -137,6 +140,18 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
        amdgpu_query_info(device, AMDGPU_INFO_MEMORY, sizeof(mem), &mem)) {
       fprintf(stderr, "radv/xclipse: device query failed.\n");
       result = VK_ERROR_INITIALIZATION_FAILED;
+      goto finish;
+   }
+
+   /* The register layouts, packets and workarounds of this port all come from Xclipse 960.  Another
+    * generation would run with them and most likely hang the GPU, so it is refused instead.
+    */
+   if ((dev.chip_rev >> 24) != XCLIPSE_SUPPORTED_GENERATION) {
+      char name[32];
+      radv_xclipse_marketing_name(&dev, name, sizeof(name));
+      fprintf(stderr, "radv/xclipse: %s (chip revision 0x%08x) is not supported, only Xclipse 960 is.\n", name,
+              dev.chip_rev);
+      result = VK_ERROR_INCOMPATIBLE_DRIVER;
       goto finish;
    }
 
