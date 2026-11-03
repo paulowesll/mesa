@@ -377,8 +377,27 @@ radv_get_driver_uuid(void *uuid)
 }
 
 static void
-radv_get_device_uuid(const struct radeon_info *gpu_info, void *uuid)
+radv_get_device_uuid(const struct radeon_info *gpu_info, const drmDevicePtr drm_device, void *uuid)
 {
+   /* Xclipse is a platform device: the UUID that ac derives from the PCI address would be all
+    * zeros.  Hash the chip and the platform device name instead, which are the same in every
+    * process.
+    */
+   if (gpu_info->is_xclipse && drm_device && drm_device->bustype == DRM_BUS_PLATFORM) {
+      blake3_hasher ctx;
+      unsigned char blake3[BLAKE3_KEY_LEN];
+
+      _mesa_blake3_init(&ctx);
+      _mesa_blake3_update(&ctx, "radv-xclipse", strlen("radv-xclipse"));
+      _mesa_blake3_update(&ctx, &gpu_info->pci_id, sizeof(gpu_info->pci_id));
+      _mesa_blake3_update(&ctx, &gpu_info->chip_rev, sizeof(gpu_info->chip_rev));
+      _mesa_blake3_update(&ctx, drm_device->businfo.platform->fullname,
+                          strnlen(drm_device->businfo.platform->fullname, DRM_PLATFORM_DEVICE_NAME_LEN));
+      _mesa_blake3_final(&ctx, blake3);
+      memcpy(uuid, blake3, VK_UUID_SIZE);
+      return;
+   }
+
    ac_compute_device_uuid(gpu_info, uuid, VK_UUID_SIZE);
 }
 
@@ -947,7 +966,8 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_mutable_descriptor_type = true, /* Trivial promotion from VALVE. */
       .EXT_nested_command_buffer = true,
       .EXT_non_seamless_cube_map = true,
-      .EXT_pci_bus_info = true,
+      /* Xclipse sits on the platform bus, not PCI (its vendor driver does not expose this either). */
+      .EXT_pci_bus_info = !pdev->info.is_xclipse,
 #ifndef _WIN32
       .EXT_physical_device_drm = true,
 #endif
@@ -2874,7 +2894,7 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
       vk_warn_non_conformant_implementation("radv");
 
    radv_get_driver_uuid(&pdev->driver_uuid);
-   radv_get_device_uuid(&pdev->info, &pdev->device_uuid);
+   radv_get_device_uuid(&pdev->info, drm_device, &pdev->device_uuid);
    radv_get_optimal_tiling_layout_uuid(pdev, &pdev->optimal_tiling_layout_uuid);
 
    pdev->dcc_msaa_allowed = (instance->perftest_flags & RADV_PERFTEST_DCC_MSAA);
@@ -2962,7 +2982,9 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
    struct stat primary_stat = {0}, render_stat = {0};
 
    pdev->available_nodes = drm_device->available_nodes;
-   pdev->bus_info = *drm_device->businfo.pci;
+   /* For platform devices (Xclipse), businfo holds the platform device name, not a PCI address. */
+   if (drm_device->bustype == DRM_BUS_PCI)
+      pdev->bus_info = *drm_device->businfo.pci;
 
    if ((drm_device->available_nodes & (1 << DRM_NODE_PRIMARY)) &&
        stat(drm_device->nodes[DRM_NODE_PRIMARY], &primary_stat) != 0) {
