@@ -592,13 +592,23 @@ ac_emit_cp_load_context_reg_index(struct ac_cmdbuf *cs, uint32_t reg,
                                   uint32_t reg_count, uint64_t va,
                                   bool predicate)
 {
+   uint32_t dw_offset = (reg - SI_CONTEXT_REG_OFFSET) >> 2;
+
    assert(reg_count);
+
+   /* Xclipse places the context registers elsewhere (ac_mgfx4_ctxreg_remap.h). Without the remap,
+    * loading the clear colour of colour buffer 4 overwrote CB_COLOR0_INFO.
+    */
+   if (cs->remap_ctx_regs) {
+      assert(ac_mgfx4_ctx_range_is_contiguous(dw_offset, reg_count));
+      dw_offset = ac_mgfx4_remap_ctx_offset(dw_offset);
+   }
 
    ac_cmdbuf_begin(cs);
    ac_cmdbuf_emit(PKT3(PKT3_LOAD_CONTEXT_REG_INDEX, 3, predicate));
    ac_cmdbuf_emit(va);
    ac_cmdbuf_emit(va >> 32);
-   ac_cmdbuf_emit((reg - SI_CONTEXT_REG_OFFSET) >> 2);
+   ac_cmdbuf_emit(dw_offset);
    ac_cmdbuf_emit(reg_count); /* in DWORDS */
    ac_cmdbuf_end();
 }
