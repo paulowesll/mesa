@@ -17,6 +17,7 @@
 #include <sys/sysmacros.h>
 #endif
 
+#include "vk_android.h"
 #include "vk_drm_syncobj.h"
 #include "vk_log.h"
 #include "vk_shader_module.h"
@@ -823,7 +824,10 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
 #ifdef RADV_USE_WSI_PLATFORM
       .KHR_present_id = true,
       .KHR_present_id2 = true,
-      .KHR_present_wait = pdev->info.has_timeline_syncobj,
+      /* The Android loader implements present_id/id2/wait2, but not present_wait: its
+       * vkWaitForPresentKHR would reach the Mesa WSI with a loader swapchain.
+       */
+      .KHR_present_wait = pdev->info.has_timeline_syncobj && !vk_android_loaded_as_hal(),
       .KHR_present_wait2 = true,
 #endif
       .KHR_push_descriptor = true,

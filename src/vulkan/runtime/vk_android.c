@@ -72,6 +72,15 @@ vk_android_get_ugralloc(void)
 static int vk_android_hal_open(const struct hw_module_t *mod, const char *id,
                                struct hw_device_t **dev);
 
+/* Set when the Android loader (or adrenotools through it) opens the driver as its Vulkan HAL. */
+static bool vk_android_hal_opened;
+
+bool
+vk_android_loaded_as_hal(void)
+{
+   return vk_android_hal_opened;
+}
+
 static_assert(HWVULKAN_DISPATCH_MAGIC == ICD_LOADER_MAGIC, "");
 
 PUBLIC struct hwvulkan_module_t HAL_MODULE_INFO_SYM = {
@@ -132,6 +141,7 @@ vk_android_hal_open(const struct hw_module_t *mod, const char *id,
             NULL, "vkGetInstanceProcAddr"),
    };
 
+   vk_android_hal_opened = true;
    *dev = &hal_dev->common;
    return 0;
 }

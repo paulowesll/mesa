@@ -42,6 +42,12 @@ struct vk_image;
 
 struct u_gralloc *vk_android_get_ugralloc(void);
 
+/* Whether the Android loader drives the driver (through the hwvulkan HAL). Its swapchains are not
+ * Mesa WSI ones: device extensions that take a VkSwapchainKHR and that the loader does not
+ * implement itself must not be exposed then.
+ */
+bool vk_android_loaded_as_hal(void);
+
 VkResult vk_android_import_anb(struct vk_device *device,
                                const VkImageCreateInfo *pCreateInfo,
                                const VkAllocationCallbacks *alloc,
@@ -68,6 +74,12 @@ static inline struct u_gralloc *
 vk_android_get_ugralloc(void)
 {
    return NULL;
+}
+
+static inline bool
+vk_android_loaded_as_hal(void)
+{
+   return false;
 }
 
 static inline VkResult
