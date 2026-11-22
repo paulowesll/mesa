@@ -682,6 +682,16 @@ radv_sgpu_buffer_make_resident(struct radeon_winsys *_ws, struct radeon_winsys_b
    struct radv_sgpu_winsys *ws = radv_sgpu_winsys(_ws);
    struct radv_sgpu_bo *bo = radv_sgpu_bo(_bo);
 
+   /* Local (VM always valid) BOs go with every submission anyway, so they are not listed: every
+    * submission walked the list under ws->lock, which games with thousands of allocations paid
+    * for on each submission.  As in the amdgpu winsys, their memory is the application's to keep
+    * alive until the work that uses it completes.
+    */
+   if (bo->is_local) {
+      bo->base.use_global_list = resident;
+      return VK_SUCCESS;
+   }
+
    simple_mtx_lock(&ws->lock);
    if (!resident) {
       radv_sgpu_bo_remove_resident_locked(bo);
