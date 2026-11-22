@@ -404,6 +404,15 @@ radv_sgpu_cs_chain(struct ac_cmdbuf *cs, struct ac_cmdbuf *next_cs, bool pre_en)
    return false;
 }
 
+/* Each stream is one IB, or one per part when it was split (see radv_sgpu_cs_split). */
+static unsigned
+radv_sgpu_cs_ib_count(struct ac_cmdbuf *base)
+{
+   const struct radv_sgpu_cs *cs = radv_sgpu_cs(base);
+
+   return cs->ib_bo ? MAX2(cs->split_count, 1) : 0;
+}
+
 static void
 radv_sgpu_cs_unchain(struct ac_cmdbuf *cs)
 {
@@ -1328,6 +1337,7 @@ radv_sgpu_cs_init_functions(struct radv_sgpu_winsys *ws)
    ws->base.cs_destroy = radv_sgpu_cs_destroy;
    ws->base.cs_reset = radv_sgpu_cs_reset;
    ws->base.cs_chain = radv_sgpu_cs_chain;
+   ws->base.cs_ib_count = radv_sgpu_cs_ib_count;
    ws->base.cs_unchain = radv_sgpu_cs_unchain;
    ws->base.cs_finalize = radv_sgpu_cs_finalize;
    ws->base.cs_grow = radv_sgpu_cs_grow;

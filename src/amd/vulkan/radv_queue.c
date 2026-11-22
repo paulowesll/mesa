@@ -1766,6 +1766,36 @@ radv_queue_submit_normal(struct radv_queue *queue, struct vk_queue_submit *submi
 
    for (uint32_t j = 0, advance; j < cmd_buffer_count; j += advance) {
       advance = MIN2(max_cs_submission, cmd_buffer_count - j);
+
+      /* The Samsung kernel fails a job of more than 16 IBs with -EINVAL, and nothing is chained
+       * there: every command buffer brings its continue preambles.  Count every IP, which is
+       * stricter than the kernel.
+       */
+      if (device->ws->cs_ib_count) {
+         unsigned num_ibs = 0, fits;
+
+         for (unsigned p = 0; p < num_initial_preambles; p++)
+            num_ibs += device->ws->cs_ib_count(initial_preambles[p]);
+         for (unsigned p = 0; p < num_postambles; p++)
+            num_ibs += device->ws->cs_ib_count(postambles[p]);
+
+         for (fits = 0; fits < advance; fits++) {
+            const struct radv_cmd_buffer *cmd_buffer =
+               (struct radv_cmd_buffer *)submission->command_buffers[j + fits];
+            unsigned cost = device->ws->cs_ib_count(cmd_buffer->cs->b);
+
+            if (cmd_buffer->gang.cs)
+               cost += device->ws->cs_ib_count(cmd_buffer->gang.cs->b);
+            for (unsigned p = 0; fits && p < num_continue_preambles; p++)
+               cost += device->ws->cs_ib_count(continue_preambles[p]);
+
+            if (fits && num_ibs + cost > 16)
+               break;
+            num_ibs += cost;
+         }
+         advance = fits;
+      }
+
       const bool last_submit = j + advance == cmd_buffer_count;
       bool submit_ace = false;
       unsigned num_submitted_cs = 0;

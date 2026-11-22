@@ -285,6 +285,11 @@ struct radeon_winsys {
 
    bool (*cs_chain)(struct ac_cmdbuf *cs, struct ac_cmdbuf *next_cs, bool pre_en);
 
+   /* The number of kernel IBs a finalized stream takes, for winsyses whose kernel limits the IBs of
+    * a job.  NULL elsewhere.
+    */
+   unsigned (*cs_ib_count)(struct ac_cmdbuf *cs);
+
    void (*cs_unchain)(struct ac_cmdbuf *cs);
 
    VkResult (*cs_finalize)(struct ac_cmdbuf *cs);
