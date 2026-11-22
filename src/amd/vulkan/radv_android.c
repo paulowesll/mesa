@@ -13,12 +13,14 @@
 #include "radv_physical_device.h"
 
 #if DETECT_OS_ANDROID
+#include <hardware/gralloc1.h>
 #include <vulkan/vk_android_native_buffer.h>
 #endif /* DETECT_OS_ANDROID */
 
 #include "util/os_file.h"
 
 #include "vk_android.h"
+#include "vk_common_entrypoints.h"
 #include "vk_format.h"
 #include "vk_log.h"
 #include "vk_util.h"
@@ -198,6 +200,26 @@ radv_image_bind_native_buffer(struct radv_device *device, struct radv_image *ima
    return VK_SUCCESS;
 }
 
+#if ANDROID_API_LEVEL >= 26
+/* Shared (front buffer) swapchains take their gralloc usage from here: linear colour buffers on
+ * Xclipse, see radv_GetPhysicalDeviceImageFormatProperties2.
+ */
+VKAPI_ATTR VkResult VKAPI_CALL
+radv_GetSwapchainGrallocUsage2ANDROID(VkDevice device_h, VkFormat format, VkImageUsageFlags imageUsage,
+                                      VkSwapchainImageUsageFlagsANDROID swapchainImageUsage,
+                                      uint64_t *grallocConsumerUsage, uint64_t *grallocProducerUsage)
+{
+   VK_FROM_HANDLE(radv_device, device, device_h);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   VkResult result = vk_common_GetSwapchainGrallocUsage2ANDROID(device_h, format, imageUsage, swapchainImageUsage,
+                                                                grallocConsumerUsage, grallocProducerUsage);
+   if (result == VK_SUCCESS && pdev->info.is_xclipse && !vk_format_is_depth_or_stencil(format))
+      *grallocProducerUsage |= GRALLOC1_PRODUCER_USAGE_CPU_WRITE;
+
+   return result;
+}
+#endif /* ANDROID_API_LEVEL >= 26 */
 
 #endif /* DETECT_OS_ANDROID */
 
@@ -536,6 +558,14 @@ radv_create_ahb_memory(struct radv_device *device, struct radv_device_memory *me
                        const VkMemoryAllocateInfo *pAllocateInfo)
 {
 #if RADV_SUPPORT_ANDROID_HARDWARE_BUFFER
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   /* Linear colour buffers on Xclipse (see radv_GetPhysicalDeviceImageFormatProperties2), which the
+    * common allocator asks the gralloc for when compression is disabled.
+    */
+   if (pdev->info.is_xclipse && mem->image && !vk_format_is_depth_or_stencil(mem->image->vk.format))
+      mem->image->vk.compr_flags |= VK_IMAGE_COMPRESSION_DISABLED_EXT;
+
    mem->android_hardware_buffer = vk_alloc_ahardware_buffer(pAllocateInfo);
    if (mem->android_hardware_buffer == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;

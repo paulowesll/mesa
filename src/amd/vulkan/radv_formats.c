@@ -1435,6 +1435,14 @@ radv_GetPhysicalDeviceImageFormatProperties2(VkPhysicalDevice physicalDevice,
    bool ahb_supported = pdev->vk.supported_extensions.ANDROID_external_memory_android_hardware_buffer;
    if (android_usage && ahb_supported) {
       android_usage->androidHardwareBufferUsage = vk_image_usage_to_ahb_usage(image_flags, image_usage);
+      /* The Samsung gralloc gives big GPU-only colour buffers a tiled and compressed layout that
+       * their handle does not describe (stride 0). RADV used them as linear and the compositor
+       * showed black. Some CPU usage makes the gralloc allocate them linear, as the common code
+       * does for VK_IMAGE_COMPRESSION_DISABLED_EXT. The Android loader allocates the buffers of
+       * swapchains with this usage.
+       */
+      if (pdev->info.is_xclipse && !vk_format_is_depth_or_stencil(format))
+         android_usage->androidHardwareBufferUsage |= AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
    }
 
    /* From the Vulkan 1.0.97 spec:
