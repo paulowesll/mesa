@@ -27,17 +27,12 @@
 
 #if DETECT_OS_ANDROID
 
-VkResult
-radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
-                        const VkNativeBufferANDROID *gralloc_info, const VkAllocationCallbacks *alloc,
-                        VkImage *out_image_h)
-
+/* Imports the buffer of a gralloc handle (VkNativeBufferANDROID) as device memory. */
+static VkResult
+radv_import_gralloc_memory(struct radv_device *device, const native_handle_t *handle,
+                           const VkAllocationCallbacks *alloc, VkDeviceMemory *out_memory_h)
 {
-   VK_FROM_HANDLE(radv_device, device, device_h);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   VkImage image_h = VK_NULL_HANDLE;
-   struct radv_image *image = NULL;
-   VkResult result;
 
    /* 1) handle->numFds is about the number of plane(s) and metadata(optional) fd in a
     * gralloc buf handle. amdgpu backend of gralloc should make sure all plane bufs
@@ -48,10 +43,9 @@ radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
     * must exceed that of the gralloc handle, and we do not own the gralloc
     * handle.
     */
-   int dma_buf = gralloc_info->handle->data[0];
-   assert(dma_buf >= 0);
-
-   VkDeviceMemory memory_h;
+   if (!handle || handle->numFds < 1 || handle->data[0] < 0)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   int dma_buf = handle->data[0];
 
    const VkImportMemoryFdInfoKHR import_info = {
       .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
@@ -74,15 +68,29 @@ radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
    if (memory_type_index == -1)
       memory_type_index = 0;
 
-   result = radv_AllocateMemory(device_h,
-                                &(VkMemoryAllocateInfo){
-                                   .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                                   .pNext = &import_info,
-                                   /* Max buffer size, unused for imports */
-                                   .allocationSize = 0x7FFFFFFF,
-                                   .memoryTypeIndex = memory_type_index,
-                                },
-                                alloc, &memory_h);
+   return radv_AllocateMemory(radv_device_to_handle(device),
+                              &(VkMemoryAllocateInfo){
+                                 .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                 .pNext = &import_info,
+                                 /* Max buffer size, unused for imports */
+                                 .allocationSize = 0x7FFFFFFF,
+                                 .memoryTypeIndex = memory_type_index,
+                              },
+                              alloc, out_memory_h);
+}
+
+VkResult
+radv_image_from_gralloc(VkDevice device_h, const VkImageCreateInfo *base_info,
+                        const VkNativeBufferANDROID *gralloc_info, const VkAllocationCallbacks *alloc,
+                        VkImage *out_image_h)
+
+{
+   VK_FROM_HANDLE(radv_device, device, device_h);
+   VkImage image_h = VK_NULL_HANDLE;
+   struct radv_image *image = NULL;
+   VkDeviceMemory memory_h;
+
+   VkResult result = radv_import_gralloc_memory(device, gralloc_info->handle, alloc, &memory_h);
    if (result != VK_SUCCESS)
       return result;
 
@@ -140,6 +148,56 @@ fail_create_image:
    radv_FreeMemory(device_h, memory_h, alloc);
    return result;
 }
+
+/* Swapchain images that the Android loader creates without memory (for
+ * VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT, or app images with
+ * VkImageSwapchainCreateInfoKHR) and binds later with a NULL memory and the VkNativeBufferANDROID of
+ * the gralloc buffer. Lays the image out for that buffer, as radv_image_from_gralloc does, and
+ * returns the imported memory to bind; the image owns it.
+ */
+VkResult
+radv_image_bind_native_buffer(struct radv_device *device, struct radv_image *image,
+                              const VkNativeBufferANDROID *native_buffer, struct radv_device_memory **out_mem)
+{
+   VkDeviceMemory memory_h;
+   VkResult result = radv_import_gralloc_memory(device, native_buffer->handle, NULL, &memory_h);
+   if (result != VK_SUCCESS)
+      return result;
+
+   struct radv_device_memory *mem = radv_device_memory_from_handle(memory_h);
+   struct radeon_bo_metadata md;
+   device->ws->buffer_get_metadata(device->ws, mem->bo, &md);
+
+   /* vk_android_get_anb_layout looks for the native buffer in a create info. */
+   const VkImageCreateInfo anb_info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+      .pNext = native_buffer,
+   };
+   VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info;
+   VkImageDrmFormatModifierExplicitCreateInfoEXT *mod_info_p = NULL;
+   VkSubresourceLayout layouts[RADV_ANDROID_MAX_PLANES];
+   if (vk_android_get_anb_layout(&anb_info, &mod_info, layouts, RADV_ANDROID_MAX_PLANES) == VK_SUCCESS) {
+      for (unsigned plane = 0; plane < image->plane_count; ++plane)
+         image->planes[plane].surface.modifier = mod_info.drmFormatModifier;
+      mod_info_p = &mod_info;
+   }
+
+   result = radv_image_create_layout(device, (struct radv_image_create_info){.no_metadata_planes = true, .bo_metadata = &md},
+                                     mod_info_p, NULL, image);
+   if (result == VK_SUCCESS && mem->bo->size < image->size)
+      result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   if (result != VK_SUCCESS) {
+      radv_FreeMemory(radv_device_to_handle(device), memory_h, NULL);
+      return result;
+   }
+
+   if (image->owned_memory != VK_NULL_HANDLE)
+      radv_FreeMemory(radv_device_to_handle(device), image->owned_memory, NULL);
+   image->owned_memory = memory_h;
+   *out_mem = mem;
+   return VK_SUCCESS;
+}
+
 
 #endif /* DETECT_OS_ANDROID */
 

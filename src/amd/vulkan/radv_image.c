@@ -1503,6 +1503,13 @@ radv_image_create(VkDevice _device, const struct radv_image_create_info *create_
 
    vk_image_init(&device->vk, &image->vk, pCreateInfo);
 
+   /* Swapchain images of the Android loader that it binds to a gralloc buffer later
+    * (radv_image_bind_native_buffer): external images, laid out at bind time like AHB images.
+    */
+   const bool anb_alias = vk_image_is_android_native_buffer_alias(&image->vk);
+   if (anb_alias)
+      image->vk.external_handle_types |= VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+
    image->plane_count = vk_format_get_plane_count(format);
    image->disjoint = image->plane_count > 1 && image->vk.create_flags & VK_IMAGE_CREATE_2_DISJOINT_BIT_KHR;
 
@@ -1540,6 +1547,11 @@ radv_image_create(VkDevice _device, const struct radv_image_create_info *create_
 
       *pImage = radv_image_to_handle(image);
       assert(!(image->vk.create_flags & VK_IMAGE_CREATE_2_SPARSE_BINDING_BIT_KHR));
+      return VK_SUCCESS;
+   }
+
+   if (anb_alias) {
+      *pImage = radv_image_to_handle(image);
       return VK_SUCCESS;
    }
 
@@ -1813,6 +1825,17 @@ radv_image_is_renderable(const struct radv_image *image)
    return true;
 }
 
+/* Whether swapchains are the Android loader's, which enables VK_ANDROID_native_buffer on the driver. */
+static bool
+radv_uses_android_loader_swapchains(const struct radv_device *device)
+{
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+   return device->vk.enabled_extensions.ANDROID_native_buffer;
+#else
+   return false;
+#endif
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateImage(VkDevice _device, const VkImageCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator,
                  VkImage *pImage)
@@ -1827,7 +1850,10 @@ radv_CreateImage(VkDevice _device, const VkImageCreateInfo *pCreateInfo, const V
    VK_FROM_HANDLE(radv_device, device, _device);
    const struct radv_physical_device *pdev = radv_device_physical(device);
 
-   if (wsi_common_is_swapchain_image(pCreateInfo))
+   /* Under the Android loader (which enables VK_ANDROID_native_buffer), swapchains are the
+    * loader's, not Mesa WSI ones, even in a build that also has a Mesa WSI platform.
+    */
+   if (wsi_common_is_swapchain_image(pCreateInfo) && !radv_uses_android_loader_swapchains(device))
       return wsi_common_create_swapchain_image(pdev->vk.wsi_device, pCreateInfo, pImage);
 
    const struct wsi_image_create_info *wsi_info = vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
@@ -1891,9 +1917,25 @@ radv_BindImageMemory2(VkDevice _device, uint32_t bindInfoCount, const VkBindImag
       if (status)
          *status->pResult = VK_SUCCESS;
 
+#if DETECT_OS_ANDROID
+      /* Swapchain image of the Android loader bound to its gralloc buffer. The swapchain handle of
+       * a VkBindImageMemorySwapchainInfoKHR here is the loader's: only the native buffer is usable.
+       */
+      const VkNativeBufferANDROID *native_buffer = vk_find_struct_const(pBindInfos[i].pNext, NATIVE_BUFFER_ANDROID);
+      if (!mem && native_buffer) {
+         VkResult result = radv_image_bind_native_buffer(device, image, native_buffer, &mem);
+         if (result != VK_SUCCESS) {
+            if (status)
+               *status->pResult = result;
+            return vk_error(device, result);
+         }
+         offset = 0;
+      }
+#endif
+
       /* Ignore this struct on Android, we cannot access swapchain structures there. */
 #ifdef RADV_USE_WSI_PLATFORM
-      if (!mem) {
+      if (!mem && !radv_uses_android_loader_swapchains(device)) {
          const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
             vk_find_struct_const(pBindInfos[i].pNext, BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR);
          assert(swapchain_info && swapchain_info->swapchain != VK_NULL_HANDLE);
@@ -1902,6 +1944,12 @@ radv_BindImageMemory2(VkDevice _device, uint32_t bindInfoCount, const VkBindImag
          offset = 0;
       }
 #endif
+
+      if (!mem) {
+         if (status)
+            *status->pResult = VK_ERROR_UNKNOWN;
+         return vk_errorf(device, VK_ERROR_UNKNOWN, "No memory to bind the image to.\n");
+      }
 
       const VkBindImagePlaneMemoryInfo *plane_info = NULL;
       uint32_t bind_idx = 0;
