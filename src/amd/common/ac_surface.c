@@ -5068,16 +5068,10 @@ gfx10_surface_compute_nbc_view(struct ac_addrlib *addrlib, const struct radeon_i
    input.size = sizeof(ADDR2_COMPUTE_NONBLOCKCOMPRESSEDVIEW_INPUT);
    input.swizzleMode = surf->u.gfx9.swizzle_mode;
    input.resourceType = (AddrResourceType)surf->u.gfx9.resource_type;
-   switch (surf->bpe) {
-   case 8:
-      input.format = ADDR_FMT_BC1;
-      break;
-   case 16:
-      input.format = ADDR_FMT_BC3;
-      break;
-   default:
-      assert(0);
-   }
+   /* The real block size, as for the surface itself: ASTC with blocks other than 4x4 (Xclipse)
+    * has another mip chain than BC1/BC3 of the same bpe.
+    */
+   input.format = bpe_to_format(surf);
    input.width = surf_info->width;
    input.height = surf_info->height;
    input.numSlices = surf_info->array_size;
