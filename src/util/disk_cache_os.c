@@ -1013,8 +1013,10 @@ disk_cache_enabled()
     * can set `mesa.shader.cache.disable=false` property.
     * Don't forget to also set the shader cache path to something readable
     * and writable by the application via `mesa.shader.cache.dir`.
+    * Builds with RADV for Xclipse keep it on (SHADER_CACHE_ENABLE_ON_ANDROID,
+    * see meson.build).
     */
-#if defined(SHADER_CACHE_DISABLE_BY_DEFAULT) || DETECT_OS_ANDROID
+#if defined(SHADER_CACHE_DISABLE_BY_DEFAULT) || (DETECT_OS_ANDROID && !defined(SHADER_CACHE_ENABLE_ON_ANDROID))
    bool disable_by_default = true;
 #else
    bool disable_by_default = false;

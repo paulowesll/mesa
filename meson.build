@@ -1258,6 +1258,13 @@ if with_shader_cache
   if not get_option('shader-cache-default')
     pre_args += '-DSHADER_CACHE_DISABLE_BY_DEFAULT'
   endif
+  # Android turns the cache off by default, as EGL applications keep theirs through
+  # EGL_ANDROID_blob_cache.  RADV for Xclipse runs Vulkan games through translation layers,
+  # which have no such cache: without one every launch compiled every pipeline again, including
+  # the driver's own.  MESA_SHADER_CACHE_DISABLE=true still turns it off.
+  if get_option('radv-xclipse') and get_option('shader-cache-default')
+    pre_args += '-DSHADER_CACHE_ENABLE_ON_ANDROID'
+  endif
 
   shader_cache_max_size = get_option('shader-cache-max-size')
   if shader_cache_max_size != ''
