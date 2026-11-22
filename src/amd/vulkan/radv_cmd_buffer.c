@@ -6098,8 +6098,12 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
          radeon_set_context_reg(R_028EC0_CB_COLOR0_INFO + i * 4,
                                 S_028EC0_FORMAT(V_028EC0_COLOR_32) | S_028EC0_NUMBER_TYPE(V_028C70_NUMBER_FLOAT));
       } else {
-         const uint32_t cb_color0_info = (pdev->info.gfx_level >= GFX11 ? S_028C70_FORMAT_GFX11(V_028C70_COLOR_32)
-                                                                        : S_028C70_FORMAT_GFX6(V_028C70_COLOR_32)) |
+         /* Xclipse keeps the GFX10.3 layout of CB_COLOR_INFO (see ac_descriptors.c): the GFX11 one
+          * reads there as COLOR_8 with float numbers, a combination that does not exist.
+          */
+         const bool gfx11_layout = pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse;
+         const uint32_t cb_color0_info = (gfx11_layout ? S_028C70_FORMAT_GFX11(V_028C70_COLOR_32)
+                                                       : S_028C70_FORMAT_GFX6(V_028C70_COLOR_32)) |
                                          S_028C70_NUMBER_TYPE(V_028C70_NUMBER_FLOAT);
          radeon_set_context_reg(R_028C70_CB_COLOR0_INFO + i * 0x3C, cb_color0_info);
       }
