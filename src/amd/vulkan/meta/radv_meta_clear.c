@@ -1121,7 +1121,8 @@ static uint32_t
 radv_dcc_single_clear_value(const struct radv_device *device)
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   return pdev->info.gfx_level >= GFX11 ? GFX11_DCC_CLEAR_SINGLE : GFX9_DCC_CLEAR_SINGLE;
+   /* Xclipse DCC is GFX10.3-style (gfx8_get_fast_clear_parameters picks its codes). */
+   return pdev->info.gfx_level >= GFX11 && !pdev->info.is_xclipse ? GFX11_DCC_CLEAR_SINGLE : GFX9_DCC_CLEAR_SINGLE;
 }
 
 static void
@@ -1365,11 +1366,13 @@ radv_can_fast_clear_color(struct radv_cmd_buffer *cmd_buffer, const struct radv_
          gfx8_get_fast_clear_parameters(device, iview, &clear_value, &reset_value, &can_avoid_fast_clear_elim);
       }
 
-      /* The DCC of Xclipse follows GFX10.3.  Only the constant codes are used, which need neither
-       * a fast-clear eliminate nor a clear value.
+      /* The DCC of Xclipse follows GFX10.3: the constant codes, and comp-to-single for any other
+       * colour of a single-sample image (as the vendor driver clears), which need neither a
+       * fast-clear eliminate nor a clear value. Other colours used to be drawn over the whole image.
        */
       if (pdev->info.is_xclipse && reset_value != GFX8_DCC_CLEAR_0000 && reset_value != GFX8_DCC_CLEAR_0001 &&
-          reset_value != GFX8_DCC_CLEAR_1110 && reset_value != GFX8_DCC_CLEAR_1111)
+          reset_value != GFX8_DCC_CLEAR_1110 && reset_value != GFX8_DCC_CLEAR_1111 &&
+          !(reset_value == GFX9_DCC_CLEAR_SINGLE && iview->image->vk.samples == 1))
          return false;
 
       if (iview->image->vk.mip_levels > 1) {
