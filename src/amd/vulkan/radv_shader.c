@@ -1928,8 +1928,15 @@ radv_precompute_registers_hw_ngg(struct radv_device *device, struct radv_shader 
       ac_compute_late_alloc(&pdev->info, true, info->has_ngg_culling, config->scratch_bytes_per_wave > 0,
                             &late_alloc_wave64, &cu_mask);
 
-      regs->spi_shader_pgm_rsrc3_gs =
-         ac_apply_cu_en(S_00B21C_CU_EN(cu_mask) | S_00B21C_WAVE_LIMIT(0x3F), C_00B21C_CU_EN, 0, &pdev->info);
+      if (pdev->info.is_xclipse) {
+         /* Its CU-enable packet applies the CU mask of the kernel, and the vendor driver sets no
+          * wave limit.
+          */
+         regs->spi_shader_pgm_rsrc3_gs = S_00B21C_CU_EN(cu_mask);
+      } else {
+         regs->spi_shader_pgm_rsrc3_gs =
+            ac_apply_cu_en(S_00B21C_CU_EN(cu_mask) | S_00B21C_WAVE_LIMIT(0x3F), C_00B21C_CU_EN, 0, &pdev->info);
+      }
 
       if (pdev->info.gfx_level >= GFX11) {
          unsigned inst_pref_size = radv_get_inst_pref_size(&device->compiler_info, shader->exec_size);

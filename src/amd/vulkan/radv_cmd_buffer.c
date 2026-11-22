@@ -3572,7 +3572,7 @@ radv_emit_hw_ngg(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *e
                         SET_SGPR_FIELD(NGG_LDS_LAYOUT_GS_OUT_VERTEX_BASE, shader->info.ngg_info.esgs_ring_size));
    } else {
       if (pdev->info.is_xclipse)
-         radv_xclipse_emit_cu_pair(R_00B228_MGFX4_SPI_SHADER_PGM_RSRC3_GS, S_00B21C_CU_EN(0xffff),
+         radv_xclipse_emit_cu_pair(R_00B228_MGFX4_SPI_SHADER_PGM_RSRC3_GS, shader->regs.spi_shader_pgm_rsrc3_gs,
                                    shader->regs.spi_shader_pgm_rsrc4_gs_hs);
       else
          radeon_set_sh_reg(R_00B21C_SPI_SHADER_PGM_RSRC3_GS, shader->regs.spi_shader_pgm_rsrc3_gs);

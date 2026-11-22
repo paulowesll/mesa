@@ -796,6 +796,15 @@ void ac_compute_late_alloc(const struct radeon_info *info, bool ngg, bool ngg_cu
    if (info->min_good_cu_per_sa <= 2)
       return;
 
+   /* Xclipse runs without late alloc, like its vendor driver, but its vertex waves still have to
+    * leave CU1 of each SA to pixel waves: otherwise a pass with heavy vertex and pixel shaders can
+    * deadlock the GPU, with pixel waves no longer launching.
+    */
+   if (info->is_xclipse) {
+      *cu_mask &= ~BITFIELD_BIT(1);
+      return;
+   }
+
    /* If scratch is used with late alloc, the GPU could deadlock if PS uses scratch too. A more
     * complicated computation is needed to enable late alloc with scratch (see PAL).
     */
@@ -804,10 +813,6 @@ void ac_compute_late_alloc(const struct radeon_info *info, bool ngg, bool ngg_cu
 
    /* Late alloc is not used for NGG on Navi14 due to a hw bug. */
    if (ngg && info->family == CHIP_NAVI14)
-      return;
-
-   /* Xclipse runs without late alloc like its vendor driver, so no CU is masked either. */
-   if (info->is_xclipse)
       return;
 
    if (info->gfx_level >= GFX10) {
