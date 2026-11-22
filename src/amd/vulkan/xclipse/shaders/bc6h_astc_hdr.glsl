@@ -6,35 +6,33 @@
  * bc_astc_transcoder.glsl); edit the generator, not this file.
  *
  * BC6H -> ASTC 4x4 HDR for Xclipse, which samples ASTC HDR natively (format
- * 147) but has no BC6H decoder.  Each block is encoded by LANES invocations:
- *   1. decode the BC6H block exactly to fp16 (BC6H interpolates in its
- *      unquantised domain and scales by 31/64 (UF) or 31/32 (SF));
- *   2. move the texels into the ASTC HDR LNS domain (the inverse of the
- *      decoder's mantissa warp);
- *   3. fit one endpoint line (principal axis), pack it as CEM 11 (HDR RGB
- *      direct), trying both endpoint orders, the three major components and
- *      the eight shift/delta modes plus the direct 8/8/7 mode, each checked
- *      by decoding it (decoder from Mesa's astc_decoder.glsl);
- *   4. pick 3-bit weights and refit the endpoints by least squares twice.
- * The 50 candidates of each search are spread over the invocations, and the
- * winner is the lowest error, ties going to the lowest candidate index: the
- * result of trying them one after the other, whatever LANES is.
+ * 147) but has no BC6H decoder.  One invocation per block:
+ *   1. decode the BC6H block exactly (BC6H interpolates in its unquantised
+ *      domain and scales by 31/64 (UF) or 31/32 (SF)) and move the texels
+ *      into the ASTC HDR LNS domain (the inverse of the decoder's mantissa
+ *      warp), in float: every step is exact on these integers;
+ *   2. fit one endpoint line (principal axis);
+ *   3. pack it as CEM 11 (HDR RGB direct): the brighter endpoint second and
+ *      its largest channel as the major component, so the candidates are the
+ *      eight shift/delta modes and the direct 8/8/7 mode.  They are ranked by
+ *      the error their quantised endpoints give at the texel positions, which
+ *      needs no texel loop, and the best two are measured on the texels, each
+ *      texel taking the weight nearest to its projection;
+ *   4. refit the endpoints by least squares for the chosen weights and search
+ *      again, twice; the final weights are the best of the eight per texel.
+ * This gives the quality of trying the 50 candidates on every texel at a
+ * thirtieth of the cost.
  * Block mode 83 (4x4 grid, weights 0..7), one partition, endpoint range 256.
  * ASTC HDR is unsigned: negative BC6H_SFLOAT texels are clamped to 0.
  *
  * Interface as bc_astc_transcoder.glsl: binding 0 = plane 1 as
  * R32G32B32A32_UINT (one texel per block), binding 1 = plane 0 as
- * R32G32B32A32_UINT; src_layout 0 = UFLOAT, 1 = SFLOAT.
+ * R32G32B32A32_UINT; src_layout 0 = UFLOAT, 1 = SFLOAT.  Workgroups of 64 blocks along x.
  */
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-
-/* Invocations per block (1, 4 or 64), so 64 / LANES blocks per workgroup: many for the
- * latency of small copies, one for the throughput of large ones. */
-layout(constant_id = 0) const uint LANES = 1u;
-const uint CANDS_PER_LANE = (50u + LANES - 1u) / LANES;
 
 layout(push_constant) uniform PushConsts {
     ivec3 offset;
@@ -228,89 +226,43 @@ BC6HState parse_bc6h(uvec4 w, bool isSigned) {
     return st;
 }
 
-int bc7_w(int a, int b, uint w) { return (a * int(64u - w) + b * int(w) + 32) >> 6; }
-const uint W3[8] = uint[](0u, 9u, 18u, 27u, 37u, 46u, 55u, 64u);
-const uint W4[16] = uint[](0u, 4u, 9u, 13u, 17u, 21u, 26u, 30u, 34u, 38u, 43u, 47u, 51u, 55u, 60u, 64u);
 const int WQ[8] = int[](0, 9, 18, 27, 37, 46, 55, 64);
 
-/* fp16 bits of one BC6H texel (reference: Mesa texcompress_bptc_tmp.h) */
-uint bc6h_finish_fp16(int v, bool is_signed) {
-    if (!is_signed)
-        return uint((v * 31) >> 6);
-    return v < 0 ? (uint(((-v) * 31) >> 5) | 0x8000u) : uint((v * 31) >> 5);
-}
-
-/* inverse of the ASTC HDR mantissa warp: fp16 -> 16-bit LNS value */
-int fp16_to_lns(uint h) {
-    if ((h & 0x8000u) != 0u)
-        return 0;
-    if (h >= 0x7c00u)
-        h = 0x7bffu;
-    int e = int(h >> 10u), mt = int(h & 1023u) << 3, m;
-    if (mt < 1536) m = (mt + 1) / 3;
-    else if (mt < 5632) m = (mt + 514) / 4;
-    else m = (mt + 2050) / 5;
-    return (e << 11) | min(m, 0x7ff);
-}
-
-/* CEM 11 decode, Mesa astc_decoder.glsl decode_endpoint_hdr_rgb_direct() */
-void cem11_decode(int v[6], out ivec3 ep0, out ivec3 ep1) {
-    int maj = ((v[4] & 0x80) >> 7) | ((v[5] & 0x80) >> 6);
-    if (maj == 3) {
-        ep0 = ivec3(v[0] << 4, v[2] << 4, (v[4] & 0x7f) << 5);
-        ep1 = ivec3(v[1] << 4, v[3] << 4, (v[5] & 0x7f) << 5);
-        return;
-    }
-    int mode = ((v[1] & 0x80) >> 7) | ((v[2] & 0x80) >> 6) | ((v[3] & 0x80) >> 5);
-    int va = v[0] | ((v[1] & 0x40) << 2), vb0 = v[2] & 0x3f, vb1 = v[3] & 0x3f, vc = v[1] & 0x3f;
-    int d_bits = 7 - (mode & 1);
-    if ((mode & 5) == 4)
-        d_bits -= 2;
-    int vd0 = bitfieldExtract(v[4] & 0x7f, 0, d_bits), vd1 = bitfieldExtract(v[5] & 0x7f, 0, d_bits);
-    int x0 = (v[2] >> 6) & 1, x1 = (v[3] >> 6) & 1, x2 = (v[4] >> 6) & 1, x3 = (v[5] >> 6) & 1;
-    int x4 = (v[4] >> 5) & 1, x5 = (v[5] >> 5) & 1;
-    int ohm = 1 << mode;
-    if ((ohm & 0xa4) != 0) va |= x0 << 9;
-    if ((ohm & 0x08) != 0) va |= x2 << 9;
-    if ((ohm & 0x50) != 0) va |= x4 << 9;
-    if ((ohm & 0x50) != 0) va |= x5 << 10;
-    if ((ohm & 0xa0) != 0) va |= x1 << 10;
-    if ((ohm & 0xc0) != 0) va |= x2 << 11;
-    if ((ohm & 0x04) != 0) vc |= x1 << 6;
-    if ((ohm & 0xe8) != 0) vc |= x3 << 6;
-    if ((ohm & 0x20) != 0) vc |= x2 << 7;
-    if ((ohm & 0x5b) != 0) vb0 |= x0 << 6;
-    if ((ohm & 0x5b) != 0) vb1 |= x1 << 6;
-    if ((ohm & 0x12) != 0) vb0 |= x2 << 7;
-    if ((ohm & 0x12) != 0) vb1 |= x3 << 7;
-    int sh = (mode >> 1) ^ 3;
-    va <<= sh; vb0 <<= sh; vb1 <<= sh; vc <<= sh; vd0 *= 1 << sh; vd1 *= 1 << sh;
-    ep1 = clamp(ivec3(va, va - vb0, va - vb1), ivec3(0), ivec3(0xfff));
-    ep0 = clamp(ivec3(va - vc, va - vb0 - vc - vd0, va - vb1 - vc - vd1), ivec3(0), ivec3(0xfff));
-    if (maj == 1) { ep0 = ep0.grb; ep1 = ep1.grb; }
-    else if (maj == 2) { ep0 = ep0.bgr; ep1 = ep1.bgr; }
-}
-
+/* Field widths of the CEM 11 shift/delta modes: va, vb, vc, vd. */
 const int WA[8] = int[](9, 9, 10, 10, 11, 11, 12, 12);
 const int WB[8] = int[](7, 8, 6, 7, 8, 6, 7, 6);
 const int WC[8] = int[](6, 6, 7, 7, 6, 8, 7, 7);
 const int WD[8] = int[](7, 6, 7, 6, 5, 6, 5, 6);
 
 int rshr(int v, int s) { return s != 0 ? (v + (1 << (s - 1))) >> s : v; }
-int rdiv(int v, int s) { return int(round(float(v) / float(1 << s))); }
+int rdiv(int v, float scale) { return int(round(float(v) * scale)); }
 
-/* one CEM 11 candidate: shift/delta mode, major component; T0/T1 in decode
- * order (major component first) */
-void cem11_pack(int mode, int maj, ivec3 T0, ivec3 T1, out int v[6]) {
+/* The quantised fields of shift/delta mode 'mode' for endpoints T0, T1 in decode order (major
+ * component first). */
+void cem11_fields(int mode, ivec3 T0, ivec3 T1, out int va, out int vb0, out int vb1, out int vc,
+                  out int vd0, out int vd1) {
     int sh = (mode >> 1) ^ 3;
-    int va = clamp(rshr(T1.x, sh), 0, (1 << WA[mode]) - 1);
+    float scale = 1.0 / float(1 << sh);
+    va = clamp(rshr(T1.x, sh), 0, (1 << WA[mode]) - 1);
     int A = va << sh;
-    int vb0 = clamp(rdiv(A - T1.y, sh), 0, (1 << WB[mode]) - 1);
-    int vb1 = clamp(rdiv(A - T1.z, sh), 0, (1 << WB[mode]) - 1);
-    int vc = clamp(rdiv(A - T0.x, sh), 0, (1 << WC[mode]) - 1);
+    vb0 = clamp(rdiv(A - T1.y, scale), 0, (1 << WB[mode]) - 1);
+    vb1 = clamp(rdiv(A - T1.z, scale), 0, (1 << WB[mode]) - 1);
+    vc = clamp(rdiv(A - T0.x, scale), 0, (1 << WC[mode]) - 1);
     int dmax = (1 << (WD[mode] - 1)) - 1, dmin = -(1 << (WD[mode] - 1));
-    int vd0 = clamp(rdiv(((va - vb0 - vc) << sh) - T0.y, sh), dmin, dmax);
-    int vd1 = clamp(rdiv(((va - vb1 - vc) << sh) - T0.z, sh), dmin, dmax);
+    vd0 = clamp(rdiv(((va - vb0 - vc) << sh) - T0.y, scale), dmin, dmax);
+    vd1 = clamp(rdiv(((va - vb1 - vc) << sh) - T0.z, scale), dmin, dmax);
+}
+
+/* The endpoints, in decode order, that the decoder (Mesa astc_decoder.glsl
+ * decode_endpoint_hdr_rgb_direct()) reads back from those fields. */
+void cem11_endpoints(int mode, int va, int vb0, int vb1, int vc, int vd0, int vd1, out ivec3 e0, out ivec3 e1) {
+    int sh = (mode >> 1) ^ 3;
+    e1 = clamp(ivec3(va, va - vb0, va - vb1) << sh, ivec3(0), ivec3(0xfff));
+    e0 = clamp(ivec3(va - vc, va - vb0 - vc - vd0, va - vb1 - vc - vd1) << sh, ivec3(0), ivec3(0xfff));
+}
+
+/* The six endpoint bytes of those fields. */
+void cem11_bytes(int mode, int maj, int va, int vb0, int vb1, int vc, int vd0, int vd1, out int v[6]) {
     int ohm = 1 << mode;
     int x0 = (ohm & 0xa4) != 0 ? (va >> 9) & 1 : (vb0 >> 6) & 1;
     int x1 = (ohm & 0xa0) != 0 ? (va >> 10) & 1 : (ohm & 0x04) != 0 ? (vc >> 6) & 1 : (vb1 >> 6) & 1;
@@ -327,139 +279,161 @@ void cem11_pack(int mode, int maj, ivec3 T0, ivec3 T1, out int v[6]) {
     v[5] = (vd1 & 0x1f) | (x5 << 5) | (x3 << 6) | (((maj >> 1) & 1) << 7);
 }
 
-ivec3 L[16];
-int best_v[6];
-int best_w[16];
-float best_err;
+/* The direct mode (major component 3): 8, 8 and 7 bits per channel. */
+ivec3 direct_field(ivec3 P) { return ivec3(clamp(rshr(P.x, 4), 0, 255), clamp(rshr(P.y, 4), 0, 255), clamp(rshr(P.z, 5), 0, 127)); }
+ivec3 direct_endpoint(ivec3 f) { return ivec3(f.x << 4, f.y << 4, f.z << 5); }
 
-/* Per invocation: the best of its candidates, packed. */
-shared float s_err[64];
-shared uint s_cand[64], s_v0[64], s_v1[64], s_w0[64], s_w1[64];
-
-float texel_err(ivec3 d0, ivec3 d1, ivec3 l, out int wbest) {
-    float best = 3.4e38;
-    wbest = 0;
-    for (int w = 0; w < 8; w++) {
-        ivec3 C = ((d0 << 4) * (64 - WQ[w]) + (d1 << 4) * WQ[w] + 32) >> 6;
-        vec3 d = vec3(C - l);
-        float e = dot(d, d);
-        if (e < best) { best = e; wbest = w; }
-    }
-    return best;
-}
-
-/* decode slot -> final channel: major component first */
+/* decode slot <-> channel: major component first */
 ivec3 to_slots(ivec3 e, int maj) { return maj == 1 ? e.grb : maj == 2 ? e.bgr : e; }
 
-/* Every invocation of the workgroup must call this, also when its block
- * skips the search (enabled false), because of the barriers. */
-void search(ivec3 E0, ivec3 E1, bool enabled, uint slot, uint sub) {
-    float lerr = uintBitsToFloat(0x7f800000u);
-    uint lcand = 64u, lv0 = 0u, lv1 = 0u, lw0 = 0u, lw1 = 0u;
-    for (uint k = 0u; k < CANDS_PER_LANE && enabled; k++) {
-        uint c = k * LANES + sub;
-        if (c >= 50u)
-            break;
-        int ord = int(c) / 25, cand = int(c) % 25;
-        ivec3 P0 = ord == 0 ? E0 : E1, P1 = ord == 0 ? E1 : E0;
-        int v[6];
-        if (cand == 24) {
-            v[0] = clamp(rshr(P0.x, 4), 0, 255); v[2] = clamp(rshr(P0.y, 4), 0, 255);
-            v[4] = 0x80 | clamp(rshr(P0.z, 5), 0, 127);
-            v[1] = clamp(rshr(P1.x, 4), 0, 255); v[3] = clamp(rshr(P1.y, 4), 0, 255);
-            v[5] = 0x80 | clamp(rshr(P1.z, 5), 0, 127);
-        } else {
-            int maj = cand / 8, mode = cand % 8;
-            cem11_pack(mode, maj, to_slots(P0, maj), to_slots(P1, maj), v);
-        }
-        ivec3 d0, d1;
-        cem11_decode(v, d0, d1);
-        uint w0 = 0u, w1 = 0u;
-        float e = 0.0;
-        for (int i = 0; i < 16; i++) {
-            int wi;
-            e += texel_err(d0, d1, L[i], wi);
-            if (i < 8) w0 |= uint(wi) << (3 * i); else w1 |= uint(wi) << (3 * (i - 8));
-        }
-        if (e < lerr) {
-            lerr = e;
-            lcand = c;
-            lv0 = uint(v[0]) | (uint(v[1]) << 8) | (uint(v[2]) << 16) | (uint(v[3]) << 24);
-            lv1 = uint(v[4]) | (uint(v[5]) << 8);
-            lw0 = w0;
-            lw1 = w1;
-        }
-    }
-    uint lane = slot * LANES + sub;
-    s_err[lane] = lerr;
-    s_cand[lane] = lcand;
-    s_v0[lane] = lv0;
-    s_v1[lane] = lv1;
-    s_w0[lane] = lw0;
-    s_w1[lane] = lw1;
-    barrier();
+/* the texels in the LNS domain */
+vec3 Lf[16];
 
-    uint win = slot * LANES;
-    for (uint j = 1u; j < LANES; j++) {
-        uint o = slot * LANES + j;
-        if (s_err[o] < s_err[win] || (s_err[o] == s_err[win] && s_cand[o] < s_cand[win]))
-            win = o;
+/* Error of the decoded line D0-D1 (12-bit endpoints) over the texels, each texel taking the weight
+ * nearest to its projection on the line. */
+float eval_line(ivec3 D0, ivec3 D1, out uint wp0, out uint wp1) {
+    vec3 c0 = vec3(D0 << 4), dc = vec3((D1 - D0) << 4);
+    float dd = dot(dc, dc);
+    float inv = dd > 0.0 ? 7.0 / dd : 0.0;
+    float off = -dot(c0, dc) * inv;
+    vec3 dcs = dc * (1.0 / 64.0), c0h = c0 + 0.5;
+    float e = 0.0;
+    wp0 = 0u;
+    wp1 = 0u;
+    for (int i = 0; i < 16; i++) {
+        float wf = roundEven(clamp(fma(dot(Lf[i], dc), inv, off), 0.0, 7.0));
+        float q = floor(fma(wf, 9.125, 0.5));            /* WQ[w] = (73 w + 4) >> 3 */
+        vec3 d = floor(fma(dcs, vec3(q), c0h)) - Lf[i];  /* (c0 (64 - q) + c1 q + 32) >> 6, exactly */
+        e += dot(d, d);
+        if (i < 8) wp0 |= uint(wf) << (3 * i); else wp1 |= uint(wf) << (3 * (i - 8));
     }
-    if (enabled && s_err[win] < best_err) {
-        best_err = s_err[win];
-        uint v0 = s_v0[win], v1 = s_v1[win], w0 = s_w0[win], w1 = s_w1[win];
-        for (int i = 0; i < 4; i++)
-            best_v[i] = int((v0 >> (8 * i)) & 0xffu);
-        best_v[4] = int(v1 & 0xffu);
-        best_v[5] = int((v1 >> 8) & 0xffu);
-        for (int i = 0; i < 8; i++) {
-            best_w[i] = int((w0 >> (3 * i)) & 7u);
-            best_w[i + 8] = int((w1 >> (3 * i)) & 7u);
-        }
-    }
-    barrier();
+    return e;
 }
 
-void put_bits(inout uvec4 o, uint pos, uint n, uint v) {
-    for (uint k = 0u; k < n; k++)
-        if (((v >> k) & 1u) != 0u)
-            o[(pos + k) >> 5u] |= 1u << ((pos + k) & 31u);
+/* The same with all eight weights tried for every texel. */
+float eval_exhaustive(ivec3 D0, ivec3 D1, out uint wp0, out uint wp1) {
+    ivec3 c0 = D0 << 4, c1 = D1 << 4;
+    vec3 P[8];
+    for (int w = 0; w < 8; w++)
+        P[w] = vec3((c0 * (64 - WQ[w]) + c1 * WQ[w] + 32) >> 6);
+    float e = 0.0;
+    wp0 = 0u;
+    wp1 = 0u;
+    for (int i = 0; i < 16; i++) {
+        float best = 3.4e38;
+        uint wb = 0u;
+        for (int w = 0; w < 8; w++) {
+            vec3 d = P[w] - Lf[i];
+            float ew = dot(d, d);
+            if (ew < best) { best = ew; wb = uint(w); }
+        }
+        e += best;
+        if (i < 8) wp0 |= wb << (3 * i); else wp1 |= wb << (3 * (i - 8));
+    }
+    return e;
+}
+
+/* The best candidate of all searches: its mode (8 = direct), major component, the endpoints it
+ * was packed from (endpoint 0 from P0), the decoded endpoints and the weights. */
+float best_err;
+int best_mode, best_maj;
+ivec3 best_P0, best_P1, best_D0, best_D1;
+uint best_wp0, best_wp1;
+
+void try_line(int mode, int maj, ivec3 P0, ivec3 P1, ivec3 D0, ivec3 D1) {
+    uint wp0, wp1;
+    float e = eval_line(D0, D1, wp0, wp1);
+    if (e < best_err) {
+        best_err = e; best_mode = mode; best_maj = maj;
+        best_P0 = P0; best_P1 = P1; best_D0 = D0; best_D1 = D1;
+        best_wp0 = wp0; best_wp1 = wp1;
+    }
+}
+
+/* Packs endpoints E0, E1 (12-bit; E0t, E1t unrounded) in every mode and ranks the candidates by
+ * the error of their quantised endpoints at the texel positions t (a = S (1 - t)^2,
+ * b = S t (1 - t), c = S t^2 over the texels); the best two are measured on the texels. */
+void search(ivec3 E0, ivec3 E1, vec3 E0t, vec3 E1t, float a, float b, float c) {
+    bool swap = max(max(E0.x, E0.y), E0.z) > max(max(E1.x, E1.y), E1.z);
+    ivec3 P0 = swap ? E1 : E0, P1 = swap ? E0 : E1;
+    vec3 P0t = swap ? E1t : E0t, P1t = swap ? E0t : E1t;
+    float w0 = swap ? c : a, w1 = swap ? a : c, w01 = 2.0 * b;
+    int maj = P1.x >= P1.y && P1.x >= P1.z ? 0 : P1.y >= P1.z ? 1 : 2;
+    ivec3 T0 = to_slots(P0, maj), T1 = to_slots(P1, maj);
+
+    float m0 = 3.4e38, m1 = 3.4e38;
+    int k0 = 8, k1 = -1;
+    ivec3 A0 = ivec3(0), A1 = ivec3(0), B0 = ivec3(0), B1 = ivec3(0);
+    /* the mode is the same in all invocations, so the field widths are constants */
+    for (int mode = 0; mode < 9; mode++) {
+        ivec3 D0, D1;
+        if (mode == 8) {
+            D0 = direct_endpoint(direct_field(P0));
+            D1 = direct_endpoint(direct_field(P1));
+        } else {
+            int va, vb0, vb1, vc, vd0, vd1;
+            ivec3 e0, e1;
+            cem11_fields(mode, T0, T1, va, vb0, vb1, vc, vd0, vd1);
+            cem11_endpoints(mode, va, vb0, vb1, vc, vd0, vd1, e0, e1);
+            D0 = to_slots(e0, maj);
+            D1 = to_slots(e1, maj);
+        }
+        vec3 d0 = vec3(D0) - P0t, d1 = vec3(D1) - P1t;
+        float m = w0 * dot(d0, d0) + w01 * dot(d0, d1) + w1 * dot(d1, d1);
+        if (m < m0) {
+            m1 = m0; k1 = k0; B0 = A0; B1 = A1;
+            m0 = m; k0 = mode; A0 = D0; A1 = D1;
+        } else if (m < m1) {
+            m1 = m; k1 = mode; B0 = D0; B1 = D1;
+        }
+    }
+    try_line(k0, maj, P0, P1, A0, A1);
+    if (k1 >= 0)
+        try_line(k1, maj, P0, P1, B0, B1);
 }
 
 void main() {
-    uint slot = gl_LocalInvocationIndex / LANES, sub = gl_LocalInvocationIndex % LANES;
-    uvec3 bid = uvec3(gl_WorkGroupID.x * (64u / LANES) + slot, gl_WorkGroupID.yz);
-    /* Blocks past the edge still take part in the barriers. */
+    uvec3 bid = uvec3(gl_WorkGroupID.x * 64u + gl_LocalInvocationIndex, gl_WorkGroupID.yz);
     bool inside = bid.x * 4u < pc.width && bid.y * 4u < pc.height;
     ivec3 block = ivec3(bid) + pc.offset;
     if (gl_LocalInvocationIndex == 0u)
         init_p6h();
     barrier();
+    if (!inside)
+        return;
     uvec4 w = pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0) : texelFetch(PayloadInput2DArray, block, 0);
     bool is_signed = pc.src_layout == 1u;
 
+    /* The texels: v = a + ((b - a) w + 32) >> 6 in the unquantised domain (Mesa
+     * texcompress_bptc_tmp.h), the fp16 bits (v 31) >> 6 (UF) or (v 31) >> 5 (SF; negative values
+     * give 0, as ASTC HDR is unsigned), then the inverse of the LNS mantissa warp
+     * (m < 512: 3m, m < 1536: 4m - 512, else 5m - 2048). */
     BC6HState st = parse_bc6h(w, is_signed);
+    bool valid = st.m_idx <= 13u, one = st.m_idx >= 10u;
+    vec3 R0 = vec3(st.r[0], st.g[0], st.b[0]), R0d = vec3(st.r[1], st.g[1], st.b[1]) - R0;
+    vec3 R1 = vec3(st.r[2], st.g[2], st.b[2]), R1d = vec3(st.r[3], st.g[3], st.b[3]) - R1;
+    float fin = is_signed ? 31.0 / 32.0 : 31.0 / 64.0;
+    uint pbase = st.partition_index * 16u;
     for (uint i = 0u; i < 16u; i++) {
-        uvec3 h = uvec3(0u);
-        if (st.m_idx <= 13u) {
-            uint ps = st.m_idx >= 10u ? (i == 0u ? 128u : 0u) : get_p6h(st.partition_index * 16u + i);
-            uint idx = i < 8u ? ((st.idx0 >> (i * 4u)) & 15u) : ((st.idx1 >> ((i - 8u) * 4u)) & 15u);
-            uint ep = (ps & 1u) * 2u, wv = st.m_idx >= 10u ? W4[idx] : W3[idx];
-            h = uvec3(bc6h_finish_fp16(bc7_w(st.r[ep], st.r[ep + 1u], wv), is_signed),
-                      bc6h_finish_fp16(bc7_w(st.g[ep], st.g[ep + 1u], wv), is_signed),
-                      bc6h_finish_fp16(bc7_w(st.b[ep], st.b[ep + 1u], wv), is_signed));
-        }
-        L[i] = ivec3(fp16_to_lns(h.x), fp16_to_lns(h.y), fp16_to_lns(h.z));
+        uint idx = ((i < 8u ? st.idx0 : st.idx1) >> ((i & 7u) * 4u)) & 15u;
+        uint wq = one ? (idx * 1092u + 128u) >> 8u : (idx * 73u + 4u) >> 3u;   /* the 4- and 3-bit BPTC weights */
+        bool r1 = !one && (get_p6h(pbase + i) & 1u) != 0u;
+        vec3 v = (r1 ? R1 : R0) + floor(fma(r1 ? R1d : R0d, vec3(float(wq) * (1.0 / 64.0)), vec3(0.5)));
+        vec3 h = max(floor(v * fin), vec3(0.0));
+        vec3 e = floor(h * (1.0 / 1024.0)), mt = (h - e * 1024.0) * 8.0;
+        vec3 m = mix(mix(floor((mt + 2050.0) * (1.0 / 5.0)), floor((mt + 514.0) * 0.25), lessThan(mt, vec3(5632.0))),
+                     floor((mt + 1.0) * (1.0 / 3.0)), lessThan(mt, vec3(1536.0)));
+        Lf[i] = valid ? e * 2048.0 + min(m, vec3(2047.0)) : vec3(0.0);
     }
 
-    /* principal axis of the texels in the LNS domain */
+    /* principal axis of the texels */
     vec3 mean = vec3(0.0);
     for (int i = 0; i < 16; i++)
-        mean += vec3(L[i]);
+        mean += Lf[i];
     mean /= 16.0;
     mat3 cov = mat3(0.0);
     for (int i = 0; i < 16; i++) {
-        vec3 d = vec3(L[i]) - mean;
+        vec3 d = Lf[i] - mean;
         cov += outerProduct(d, d);
     }
     vec3 ax = vec3(1.0);
@@ -470,53 +444,64 @@ void main() {
             break;
         ax = n / len;
     }
-    float tmin = 3.4e38, tmax = -3.4e38;
+    float tp[16], tmin = 3.4e38, tmax = -3.4e38;
     for (int i = 0; i < 16; i++) {
-        float t = dot(vec3(L[i]) - mean, ax);
-        tmin = min(tmin, t);
-        tmax = max(tmax, t);
+        tp[i] = dot(Lf[i] - mean, ax);
+        tmin = min(tmin, tp[i]);
+        tmax = max(tmax, tp[i]);
     }
     if (tmin > tmax) { tmin = 0.0; tmax = 0.0; }
-    ivec3 E0 = clamp(ivec3(round((mean + ax * tmin) / 16.0)), ivec3(0), ivec3(0xfff));
-    ivec3 E1 = clamp(ivec3(round((mean + ax * tmax) / 16.0)), ivec3(0), ivec3(0xfff));
-
-    best_err = 3.4e38;
-    search(E0, E1, true, slot, sub);
-
-    /* least-squares refit of the endpoints for the chosen weights */
-    bool refit = true;
-    for (int it = 0; it < 2; it++) {
-        float a = 0.0, b2 = 0.0, c2 = 0.0;
-        vec3 r0 = vec3(0.0), r1 = vec3(0.0);
-        for (int i = 0; i < 16; i++) {
-            float t = float(WQ[best_w[i]]) / 64.0, s0 = 1.0 - t;
-            a += s0 * s0; b2 += s0 * t; c2 += t * t;
-            r0 += s0 * vec3(L[i]); r1 += t * vec3(L[i]);
-        }
-        float det = a * c2 - b2 * b2;
-        refit = refit && abs(det) >= 1e-6;
-        ivec3 N0 = ivec3(0), N1 = ivec3(0);
-        if (refit) {
-            N0 = clamp(ivec3(round(((c2 * r0 - b2 * r1) / det) / 16.0)), ivec3(0), ivec3(0xfff));
-            N1 = clamp(ivec3(round(((a * r1 - b2 * r0) / det) / 16.0)), ivec3(0), ivec3(0xfff));
-        }
-        search(N0, N1, refit, slot, sub);
+    vec3 E0t = clamp((mean + ax * tmin) / 16.0, vec3(0.0), vec3(4095.0));
+    vec3 E1t = clamp((mean + ax * tmax) / 16.0, vec3(0.0), vec3(4095.0));
+    float a = 0.0, b = 0.0, c = 0.0, span = tmax - tmin, ispan = span > 0.0 ? 1.0 / span : 0.0;
+    for (int i = 0; i < 16; i++) {
+        float t = (tp[i] - tmin) * ispan, s0 = 1.0 - t;
+        a += s0 * s0; b += s0 * t; c += t * t;
     }
 
-    uvec4 o = uvec4(0u);
-    put_bits(o, 0u, 11u, 83u);   /* block mode: 4x4 grid, weights 0..7 */
-    put_bits(o, 13u, 4u, 11u);   /* one partition, CEM 11 */
-    for (int i = 0; i < 6; i++)
-        put_bits(o, 17u + 8u * uint(i), 8u, uint(best_v[i]));
-    for (int i = 0; i < 16; i++)
-        for (int k = 0; k < 3; k++)
-            if (((best_w[i] >> k) & 1) != 0) {
-                uint p = 127u - uint(3 * i + k);
-                o[p >> 5u] |= 1u << (p & 31u);
-            }
+    best_err = 3.4e38;
+    best_mode = 8; best_maj = 0;
+    best_P0 = best_P1 = best_D0 = best_D1 = ivec3(0);
+    best_wp0 = best_wp1 = 0u;
+    search(ivec3(round(E0t)), ivec3(round(E1t)), E0t, E1t, a, b, c);
 
-    if (!inside || sub != 0u)
-        return;
+    /* least-squares refit of the endpoints for the chosen weights */
+    for (int it = 0; it < 2; it++) {
+        a = 0.0; b = 0.0; c = 0.0;
+        vec3 r0 = vec3(0.0), r1 = vec3(0.0);
+        for (int i = 0; i < 16; i++) {
+            uint wi = ((i < 8 ? best_wp0 : best_wp1) >> (3 * (i & 7))) & 7u;
+            float t = float((wi * 73u + 4u) >> 3u) / 64.0, s0 = 1.0 - t;
+            a += s0 * s0; b += s0 * t; c += t * t;
+            r0 += s0 * Lf[i]; r1 += t * Lf[i];
+        }
+        float det = a * c - b * b;
+        if (abs(det) < 1e-6)
+            break;
+        vec3 N0t = clamp(((c * r0 - b * r1) / det) / 16.0, vec3(0.0), vec3(4095.0));
+        vec3 N1t = clamp(((a * r1 - b * r0) / det) / 16.0, vec3(0.0), vec3(4095.0));
+        search(ivec3(round(N0t)), ivec3(round(N1t)), N0t, N1t, a, b, c);
+    }
+
+    /* the winner, with the best of the eight weights per texel */
+    int v[6];
+    if (best_mode == 8) {
+        ivec3 f0 = direct_field(best_P0), f1 = direct_field(best_P1);
+        v = int[6](f0.x, f1.x, f0.y, f1.y, 0x80 | f0.z, 0x80 | f1.z);
+    } else {
+        int va, vb0, vb1, vc, vd0, vd1;
+        cem11_fields(best_mode, to_slots(best_P0, best_maj), to_slots(best_P1, best_maj), va, vb0, vb1, vc, vd0, vd1);
+        cem11_bytes(best_mode, best_maj, va, vb0, vb1, vc, vd0, vd1, v);
+    }
+    uint wp0, wp1;
+    eval_exhaustive(best_D0, best_D1, wp0, wp1);
+
+    /* block mode 83 (bits 0-10), one partition (11-12), CEM 11 (13-16), the endpoint bytes from
+     * bit 17, the weights from bit 127 down (texel i, bit k at 127 - 3 i - k) */
+    uint e03 = uint(v[0]) | (uint(v[1]) << 8) | (uint(v[2]) << 16) | (uint(v[3]) << 24);
+    uint e45 = uint(v[4]) | (uint(v[5]) << 8);
+    uvec4 o = uvec4(83u | (11u << 13) | (e03 << 17), (e03 >> 15) | (e45 << 17),
+                    (e45 >> 15) | bitfieldReverse(wp1 >> 8), bitfieldReverse(wp0 | (wp1 << 24)));
     if (pc.image_type == 2)
         imageStore(OutputImage3D, block, o);
     else
