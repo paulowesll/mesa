@@ -165,6 +165,7 @@ struct radv_cmd_set_depth_bias_info {
    float clamp;
    float slope_factor;
    VkDepthBiasRepresentationEXT representation;
+   bool exact;
 };
 
 ALWAYS_INLINE static void
@@ -176,6 +177,7 @@ radv_cmd_set_depth_bias(struct radv_cmd_buffer *cmd_buffer, const struct radv_cm
    state->dynamic.vk.rs.depth_bias.clamp = info->clamp;
    state->dynamic.vk.rs.depth_bias.slope_factor = info->slope_factor;
    state->dynamic.vk.rs.depth_bias.representation = info->representation;
+   state->dynamic.vk.rs.depth_bias.exact = info->exact;
 
    state->dirty_dynamic |= RADV_DYNAMIC_DEPTH_BIAS;
 }
@@ -1008,12 +1010,14 @@ radv_bind_dynamic_state(struct radv_cmd_buffer *cmd_buffer, const struct radv_dy
       if (dest->vk.rs.depth_bias.constant_factor != src->vk.rs.depth_bias.constant_factor ||
           dest->vk.rs.depth_bias.clamp != src->vk.rs.depth_bias.clamp ||
           dest->vk.rs.depth_bias.slope_factor != src->vk.rs.depth_bias.slope_factor ||
-          dest->vk.rs.depth_bias.representation != src->vk.rs.depth_bias.representation) {
+          dest->vk.rs.depth_bias.representation != src->vk.rs.depth_bias.representation ||
+          dest->vk.rs.depth_bias.exact != src->vk.rs.depth_bias.exact) {
          const struct radv_cmd_set_depth_bias_info info = {
             .constant_factor = src->vk.rs.depth_bias.constant_factor,
             .clamp = src->vk.rs.depth_bias.clamp,
             .slope_factor = src->vk.rs.depth_bias.slope_factor,
             .representation = src->vk.rs.depth_bias.representation,
+            .exact = src->vk.rs.depth_bias.exact,
          };
          radv_cmd_set_depth_bias(cmd_buffer, &info);
       }
@@ -4715,7 +4719,14 @@ radv_emit_depth_bias_state(struct radv_cmd_buffer *cmd_buffer)
       VkFormat format = vk_format_depth_only(render->ds_att.format);
 
       if (format == VK_FORMAT_D16_UNORM) {
-         pa_su_poly_offset_db_fmt_cntl = S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(-16);
+         /* Xclipse biases D16 by 2^-15 per unit, as its vendor driver does, unless the exact
+          * 2^-16 is asked for: games tuned on it get shadow acne with half the bias.  Both are in
+          * the range Vulkan allows (up to twice the minimum resolvable difference).
+          */
+         const struct radv_physical_device *pdev = radv_device_physical(radv_cmd_buffer_device(cmd_buffer));
+         const bool xclipse_bias = pdev->info.is_xclipse && !d->vk.rs.depth_bias.exact;
+
+         pa_su_poly_offset_db_fmt_cntl = S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(xclipse_bias ? -15 : -16);
       } else {
          assert(format == VK_FORMAT_D32_SFLOAT);
          if (d->vk.rs.depth_bias.representation ==
@@ -10391,6 +10402,7 @@ radv_CmdSetDepthBias2EXT(VkCommandBuffer commandBuffer, const VkDepthBiasInfoEXT
       .slope_factor = pDepthBiasInfo->depthBiasSlopeFactor,
       .representation = dbr_info ? dbr_info->depthBiasRepresentation
                                  : VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT,
+      .exact = dbr_info && dbr_info->depthBiasExact,
    };
 
    radv_cmd_set_depth_bias(cmd_buffer, &info);
