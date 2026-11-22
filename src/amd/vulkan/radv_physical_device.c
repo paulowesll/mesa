@@ -3442,13 +3442,16 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
 #if RADV_XCLIPSE
       /* The heap is system RAM.  Once Android runs out of it, its low memory killer ends the
        * game and SystemUI, so the budget stops a margin short of that and applications that
-       * follow it can shrink their streaming first.
+       * follow it can shrink their streaming first.  The margin is at most half of the available
+       * RAM: with a whole 1 GiB, a phone that keeps about 1 GiB available while a game runs left
+       * that game no room at all, and engines that stay below their budget then waited for the
+       * GPU before every allocation.
        */
-      const uint64_t reserve = 1024ull << 20;
       const uint64_t available = radv_xclipse_available_memory();
-      if (available)
-         memoryBudget->heapBudget[0] =
-            MIN2(memoryBudget->heapBudget[0], internal_usage + available - MIN2(available, reserve));
+      if (available) {
+         const uint64_t reserve = MIN2(1024ull << 20, available / 2);
+         memoryBudget->heapBudget[0] = MIN2(memoryBudget->heapBudget[0], internal_usage + available - reserve);
+      }
 #endif
    } else if (!pdev->info.has_dedicated_vram) {
       if (pdev->drirc.performance.enable_unified_heap_on_apu) {
