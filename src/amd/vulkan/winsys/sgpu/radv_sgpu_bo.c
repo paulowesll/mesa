@@ -88,7 +88,11 @@ radv_sgpu_buffer_create(struct radeon_winsys *_ws, uint64_t size, unsigned align
       return radv_sgpu_virtual_bo_create(ws, size, alignment, flags, address, out_bo);
 
    alignment = MAX2(alignment, 4096u);
-   const uint64_t alloc_size = align64(MAX2(size, 1), alignment);
+   /* The alignment is the one of the address; the size only goes to whole pages, as in the amdgpu
+    * winsys.  Rounding it to the 256 KiB of application memory made every small allocation take
+    * 256 KiB that the kernel clears.
+    */
+   const uint64_t alloc_size = align64(MAX2(size, 1), 4096);
 
    struct radv_sgpu_bo *bo = calloc(1, sizeof(*bo));
    if (!bo)
