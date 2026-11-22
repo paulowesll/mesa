@@ -11414,7 +11414,13 @@ radv_cmd_buffer_begin_rendering(struct radv_cmd_buffer *cmd_buffer, const VkRend
    const uint32_t maxx = minx + render->area.extent.width;
    const uint32_t maxy = miny + render->area.extent.height;
 
-   if (pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT)
+   /* This relies on the framebuffer registers of the suspended render pass instance still being set
+    * when it resumes in the next command buffer of the batch. On Xclipse nothing is chained: every
+    * command buffer starts with a preamble that reloads the whole register state, so the draws after
+    * such a resume had no colour target and were dropped.
+    */
+   const bool resuming = pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT;
+   if (resuming && !pdev->info.is_xclipse)
       return;
 
    radeon_check_space(device->ws, cs->b, 10);
@@ -11457,7 +11463,8 @@ radv_cmd_buffer_begin_rendering(struct radv_cmd_buffer *cmd_buffer, const VkRend
 
    radv_emit_framebuffer_state(cmd_buffer);
 
-   radv_cmd_buffer_clear_rendering(cmd_buffer, pRenderingInfo);
+   if (!resuming)
+      radv_cmd_buffer_clear_rendering(cmd_buffer, pRenderingInfo);
 }
 
 static void
