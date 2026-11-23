@@ -460,8 +460,8 @@ radv_xclipse_bc_transcode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_
 
 static void
 radv_xclipse_bc_init_view(struct radv_device *device, struct radv_image_view *iview, struct radv_image *image,
-                          const VkImageSubresourceLayers *subresource, VkImageAspectFlags aspect, VkFormat format,
-                          VkImageUsageFlags2KHR usage)
+                          const VkImageSubresourceLayers *subresource, uint32_t first_layer, uint32_t layer_count,
+                          VkImageAspectFlags aspect, VkFormat format, VkImageUsageFlags2KHR usage)
 {
    const VkImageViewUsage2CreateInfoKHR usage_info = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_2_CREATE_INFO_KHR,
@@ -481,12 +481,37 @@ radv_xclipse_bc_init_view(struct radv_device *device, struct radv_image_view *iv
                                  .aspectMask = aspect,
                                  .baseMipLevel = subresource->mipLevel,
                                  .levelCount = 1,
-                                 .baseArrayLayer = 0,
-                                 .layerCount = subresource->baseArrayLayer +
-                                               vk_image_subresource_layer_count(&image->vk, subresource),
+                                 .baseArrayLayer = first_layer,
+                                 .layerCount = layer_count,
                               },
                         },
                         NULL);
+}
+
+/* Whether an uncompressed view of several layers reaches every block of a level of a
+ * block-compressed plane.  The texture unit derives the size of the level from the one of the base
+ * level, which for some sizes leaves out the last row or column of blocks (see
+ * radv_image_view_init).  A view of a single layer is then corrected with a non-block-compressed
+ * view, one of several layers is not.
+ */
+static bool
+radv_xclipse_bc_level_reachable(const struct radv_image *image, unsigned plane_id, unsigned level)
+{
+   const struct radv_image_plane *plane = &image->planes[plane_id];
+   const unsigned bw = vk_format_get_blockwidth(plane->format);
+   const unsigned bh = vk_format_get_blockheight(plane->format);
+
+   if (bw == 1 && bh == 1)
+      return true;
+
+   const unsigned level_w = DIV_ROUND_UP(u_minify(image->vk.extent.width, level), bw);
+   const unsigned level_h = DIV_ROUND_UP(u_minify(image->vk.extent.height, level), bh);
+   const unsigned base_w =
+      CLAMP(level_w << level, DIV_ROUND_UP(image->vk.extent.width, bw), plane->surface.u.gfx9.base_mip_width);
+   const unsigned base_h =
+      CLAMP(level_h << level, DIV_ROUND_UP(image->vk.extent.height, bh), plane->surface.u.gfx9.base_mip_height);
+
+   return u_minify(base_w, level) >= level_w && u_minify(base_h, level) >= level_h;
 }
 
 static void
@@ -529,23 +554,44 @@ radv_xclipse_bc_convert(struct radv_cmd_buffer *cmd_buffer, struct radv_image *i
          break;
       }
    }
-   const VkOffset3D region_offset = {offset.x, offset.y, base_slice};
-   const VkExtent3D region_extent = {extent.width, extent.height, slice_count};
+   /* The views start at layer 0 and the shaders address the slices from there, except for the levels
+    * that only views of a single layer reach in full: those are converted one layer at a time.
+    */
+   const unsigned level = subresource->mipLevel;
+   const bool per_layer = !is_3d && !((mem || radv_xclipse_bc_level_reachable(image, 0, level)) &&
+                                      radv_xclipse_bc_level_reachable(image, 1, level));
 
-   struct radv_image_view src_iview, dst_iview;
-   radv_xclipse_bc_init_view(device, &src_iview, image, subresource, VK_IMAGE_ASPECT_COLOR_BIT, load_format,
-                             VK_IMAGE_USAGE_2_SAMPLED_BIT_KHR);
-   radv_xclipse_bc_init_view(device, &dst_iview, image, subresource, VK_IMAGE_ASPECT_PLANE_1_BIT, store_format,
-                             VK_IMAGE_USAGE_2_STORAGE_BIT_KHR);
+   for (uint32_t i = 0; i < (per_layer ? slice_count : 1); i++) {
+      const uint32_t first_layer = per_layer ? base_slice + i : 0;
+      const uint32_t layer_count = per_layer || is_3d ? 1 : base_slice + slice_count;
+      const VkOffset3D region_offset = {offset.x, offset.y, per_layer ? 0 : base_slice};
+      const VkExtent3D region_extent = {extent.width, extent.height, per_layer ? 1 : slice_count};
 
-   if (path == RADV_XCLIPSE_BC_DECODE)
-      radv_xclipse_bc_decode(cmd_buffer, &src_iview, &dst_iview, format, &region_offset, &region_extent, mem);
-   else
-      radv_xclipse_bc_transcode(cmd_buffer, &src_iview, &dst_iview, format, path, &region_offset, &region_extent,
-                                mem);
+      struct radv_xclipse_bc_src_push layer_mem;
+      if (mem) {
+         const uint64_t addr = ((uint64_t)mem->addr_hi << 32 | mem->addr_lo) +
+                               (per_layer ? (uint64_t)i * mem->slice_pitch * vk_format_get_blocksize(format) : 0);
+         layer_mem = *mem;
+         layer_mem.addr_lo = addr;
+         layer_mem.addr_hi = addr >> 32;
+      }
 
-   radv_image_view_finish(&src_iview);
-   radv_image_view_finish(&dst_iview);
+      struct radv_image_view src_iview, dst_iview;
+      radv_xclipse_bc_init_view(device, &src_iview, image, subresource, first_layer, layer_count,
+                                VK_IMAGE_ASPECT_COLOR_BIT, load_format, VK_IMAGE_USAGE_2_SAMPLED_BIT_KHR);
+      radv_xclipse_bc_init_view(device, &dst_iview, image, subresource, first_layer, layer_count,
+                                VK_IMAGE_ASPECT_PLANE_1_BIT, store_format, VK_IMAGE_USAGE_2_STORAGE_BIT_KHR);
+
+      if (path == RADV_XCLIPSE_BC_DECODE)
+         radv_xclipse_bc_decode(cmd_buffer, &src_iview, &dst_iview, format, &region_offset, &region_extent,
+                                mem ? &layer_mem : NULL);
+      else
+         radv_xclipse_bc_transcode(cmd_buffer, &src_iview, &dst_iview, format, path, &region_offset,
+                                   &region_extent, mem ? &layer_mem : NULL);
+
+      radv_image_view_finish(&src_iview);
+      radv_image_view_finish(&dst_iview);
+   }
 }
 
 /* Converts the blocks of plane 0 that a copy wrote. */
