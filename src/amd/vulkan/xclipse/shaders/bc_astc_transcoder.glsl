@@ -35,6 +35,7 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 #ifndef XCLIPSE_ASTC_LOCAL_SIZE_X
@@ -249,6 +250,7 @@ uvec4 decode_bc6h_pixel(BC6HState st, uint i) {
         255u
     );
 }
+
 uvec4 bc7_exp(uvec4 e, uint b) { if (b >= 8u) return e; uint s = 8u - b; return (e << s) | (e >> (b - s)); }
 uint bc7_w(uint a, uint b, uint w) { return (a * (64u - w) + b * w + 32u) >> 6u; }
 int bc7_w(int a, int b, uint w) { return (a * int(64u - w) + b * int(w) + 32) >> 6; }
@@ -256,155 +258,155 @@ uint bc7_i2(uint a, uint b, uint i) { const uint w[4] = uint[](0u, 21u, 43u, 64u
 uint bc7_i3(uint a, uint b, uint i) { const uint w[8] = uint[](0u, 9u, 18u, 27u, 37u, 46u, 55u, 64u); return bc7_w(a, b, w[i]); }
 uint bc7_i4(uint a, uint b, uint i) { const uint w[16] = uint[](0u, 4u, 9u, 13u, 17u, 21u, 26u, 30u, 34u, 38u, 43u, 47u, 51u, 55u, 60u, 64u); return bc7_w(a, b, w[i]); }
 
-struct BC7State {
-    uint m, pid, rot, isel;
+/* BC7, with one decode path for all modes.  parse_bc7f reads the endpoints of the mode (from
+ * constant bit positions), then the indices of every mode the same way (packed 4 bits per texel)
+ * and the weight tables as (x i + y) >> z.  bc7p_prepare turns the endpoints of each subset into
+ * 16-bit terms, and decode_bc7p decodes every texel alike instead of branching on the mode for
+ * each, which the divergent modes of a wave made the wave run eight times.  The result is the
+ * BC7 decode of the wrapper this file comes from, bit for bit. */
+struct BC7F {
     uvec4 e[6];
-    /* The first index of several BC7 modes is an anchor and has one fewer
-     * bit.  Keep the decoded indices in their logical texel positions
-     * instead of packing them into fixed-width words; otherwise the omitted
-     * anchor bit shifts every following index and creates repeated bands or
-     * isolated outliers after BC7->ASTC conversion. */
-    uint idx[16];
+    uvec4 part;          /* partition byte of each texel: subset in bits 0-1, anchor in bit 7 */
+    uint ci0, ci1;       /* colour index of texels 0-7 and 8-15, 4 bits each */
+    uint ai0, ai1;       /* alpha index */
+    uvec3 cwt, awt;      /* weight = (x * i + y) >> z */
+    uint rot;
+    bool opaque, valid;
 };
+uvec3 bc7_wtab(uint bits) { return bits == 2u ? uvec3(85u, 2u, 2u) : bits == 3u ? uvec3(73u, 4u, 3u) : uvec3(1092u, 128u, 8u); }
+uint bc7f_anchor(uvec4 part, uint i) { return (part[i >> 2u] >> ((i & 3u) * 8u)) & 128u; }
+uvec4 bc7f_part2(uint pid) { uint b = pid * 4u; return uvec4(p2_packed[b], p2_packed[b + 1u], p2_packed[b + 2u], p2_packed[b + 3u]); }
+uvec4 bc7f_part3(uint pid) { uint b = pid * 4u; return uvec4(p3_packed[b], p3_packed[b + 1u], p3_packed[b + 2u], p3_packed[b + 3u]); }
 
-BC7State parse_bc7(uvec4 w) {
-    BC7State st;
-    st.m = 0u; uint p = 0u; while(st.m < 8u && bc7_read(w, p, 1u) == 0u) st.m++;
-    st.pid=0u; st.rot=0u; st.isel=0u;
-    for(uint i=0u; i<16u; i++) st.idx[i] = 0u;
-    for(uint i=0u;i<6u;i++) st.e[i] = uvec4(0u);
-    if (st.m > 7u) return st;
-
-    if (st.m == 0u) {
-        st.pid = bc7_read(w, p, 4u);
+BC7F parse_bc7f(uvec4 w) {
+    BC7F st;
+    /* the mode is the number of zero bits before the first one; every read of a mode starts at a
+     * constant bit, so the reads below are constant bitfield extracts */
+    uint m = uint(findLSB(w.x | 0x100u)), p = 0u;
+    for (uint i = 0u; i < 6u; i++) st.e[i] = uvec4(0u);
+    st.part = uvec4(0u); st.ci0 = st.ci1 = st.ai0 = st.ai1 = 0u; st.rot = 0u;
+    st.opaque = m <= 3u; st.valid = m <= 7u;
+    /* endpoints, partition and index layout of the mode */
+    uint pid = 0u, ib = 2u, ib2 = 0u, nsub = 1u;
+    bool isel = false;
+    if (m == 0u) {
+        p = 1u;
+        pid = bc7_read(w, p, 4u);
         for(uint c=0u; c<3u; c++) for(uint i=0u; i<6u; i++) st.e[i][c] = bc7_read(w, p, 4u);
         for(uint i=0u; i<6u; i++) st.e[i] = bc7_exp((st.e[i]<<1u)|uvec4(bc7_read(w,p,1u)), 5u);
-        for(uint i=0u; i<16u; i++) {
-            uint pv=get_p3(st.pid*16u+i), b=(pv&128u)!=0u?2u:3u, val=bc7_read(w,p,b);
-            st.idx[i] = val;
-        }
-    }
-    else if (st.m == 1u) {
-        st.pid = bc7_read(w, p, 6u);
+        ib = 3u; nsub = 3u;
+    } else if (m == 1u) {
+        p = 2u;
+        pid = bc7_read(w, p, 6u);
         for(uint c=0u; c<3u; c++) for(uint i=0u; i<4u; i++) st.e[i][c] = bc7_read(w, p, 6u);
         uint p0=bc7_read(w,p,1u), p1=bc7_read(w,p,1u);
         for(uint i=0u; i<4u; i++) st.e[i] = bc7_exp((st.e[i]<<1u)|uvec4(i<2u?p0:p1), 7u);
-        for(uint i=0u; i<16u; i++) {
-            uint pv=get_p2(st.pid*16u+i), b=(pv&128u)!=0u?2u:3u, val=bc7_read(w,p,b);
-            st.idx[i] = val;
-        }
-    }
-    else if (st.m == 2u) {
-        st.pid = bc7_read(w, p, 6u);
+        ib = 3u; nsub = 2u;
+    } else if (m == 2u) {
+        p = 3u;
+        pid = bc7_read(w, p, 6u);
         for(uint c=0u; c<3u; c++) for(uint i=0u; i<6u; i++) st.e[i][c] = bc7_read(w, p, 5u);
         for(uint i=0u; i<6u; i++) st.e[i] = bc7_exp(st.e[i], 5u);
-        for(uint i=0u; i<16u; i++) {
-            uint pv=get_p3(st.pid*16u+i), b=(pv&128u)!=0u?1u:2u, val=bc7_read(w,p,b);
-            st.idx[i] = val;
-        }
-    }
-    else if (st.m == 3u) {
-        st.pid = bc7_read(w, p, 6u);
+        nsub = 3u;
+    } else if (m == 3u) {
+        p = 4u;
+        pid = bc7_read(w, p, 6u);
         for(uint c=0u; c<3u; c++) for(uint i=0u; i<4u; i++) st.e[i][c] = bc7_read(w, p, 7u);
         for(uint i=0u; i<4u; i++) st.e[i] = bc7_exp((st.e[i]<<1u)|uvec4(bc7_read(w,p,1u)), 8u);
-        for(uint i=0u; i<16u; i++) {
-            uint pv=get_p2(st.pid*16u+i), b=(pv&128u)!=0u?1u:2u, val=bc7_read(w,p,b);
-            st.idx[i] = val;
-        }
-    }
-    else if (st.m == 4u) {
-        st.rot = bc7_read(w, p, 2u); st.isel = bc7_read(w, p, 1u);
+        nsub = 2u;
+    } else if (m == 4u) {
+        p = 5u;
+        st.rot = bc7_read(w, p, 2u); isel = bc7_read(w, p, 1u) != 0u;
         for(uint c=0u; c<3u; c++) { st.e[0][c] = bc7_read(w, p, 5u); st.e[1][c] = bc7_read(w, p, 5u); }
         st.e[0].a = bc7_read(w, p, 6u); st.e[1].a = bc7_read(w, p, 6u);
         st.e[0].rgb = bc7_exp(st.e[0], 5u).rgb; st.e[1].rgb = bc7_exp(st.e[1], 5u).rgb;
         st.e[0].a = bc7_exp(st.e[0], 6u).a; st.e[1].a = bc7_exp(st.e[1], 6u).a;
-        for(uint i=0u; i<16u; i++)
-            st.idx[i] = bc7_read(w,p,i==0u?1u:2u);
-        for(uint i=0u; i<16u; i++) {
-            uint val=bc7_read(w,p,i==0u?2u:3u);
-            st.idx[i] |= val << 2u;
-        }
-    }
-    else if (st.m == 5u) {
+        ib2 = 3u;
+    } else if (m == 5u) {
+        p = 6u;
         st.rot = bc7_read(w, p, 2u);
         for(uint c=0u; c<3u; c++) { st.e[0][c] = bc7_read(w, p, 7u); st.e[1][c] = bc7_read(w, p, 7u); }
         st.e[0].a = bc7_read(w, p, 8u); st.e[1].a = bc7_read(w, p, 8u);
         st.e[0].rgb = bc7_exp(st.e[0], 7u).rgb; st.e[1].rgb = bc7_exp(st.e[1], 7u).rgb;
-        for(uint i=0u; i<16u; i++)
-            st.idx[i] = bc7_read(w,p,i==0u?1u:2u);
-        for(uint i=0u; i<16u; i++)
-            st.idx[i] |= bc7_read(w,p,i==0u?1u:2u) << 2u;
-    }
-    else if (st.m == 6u) {
+        ib2 = 2u;
+    } else if (m == 6u) {
+        p = 7u;
         for(uint c=0u; c<4u; c++) { st.e[0][c] = bc7_read(w, p, 7u); st.e[1][c] = bc7_read(w, p, 7u); }
         uint p0=bc7_read(w,p,1u), p1=bc7_read(w,p,1u);
         st.e[0] = bc7_exp((st.e[0]<<1u)|uvec4(p0), 8u); st.e[1] = bc7_exp((st.e[1]<<1u)|uvec4(p1), 8u);
-        for(uint i=0u; i<16u; i++)
-            st.idx[i] = bc7_read(w,p,i==0u?3u:4u);
-    }
-    else if (st.m == 7u) {
-        st.pid = bc7_read(w, p, 6u);
+        ib = 4u;
+    } else if (m == 7u) {
+        p = 8u;
+        pid = bc7_read(w, p, 6u);
         for(uint c=0u; c<3u; c++) for(uint i=0u; i<4u; i++) st.e[i][c] = bc7_read(w, p, 5u);
         for(uint i=0u; i<4u; i++) st.e[i].a = bc7_read(w, p, 5u);
         for(uint i=0u; i<4u; i++) st.e[i] = bc7_exp((st.e[i]<<1u)|uvec4(bc7_read(w,p,1u)), 6u);
-        for(uint i=0u; i<16u; i++) {
-            uint pv=get_p2(st.pid*16u+i), b=(pv&128u)!=0u?1u:2u, val=bc7_read(w,p,b);
-            st.idx[i] = val;
+        nsub = 2u;
+    }
+    /* the indices, the same way for every mode: ib bits per texel, one fewer at texel 0 and at the
+     * anchors of the other subsets; modes 4 and 5 have a second set for alpha */
+    if (nsub == 2u) st.part = bc7f_part2(pid);
+    else if (nsub == 3u) st.part = bc7f_part3(pid);
+    uint lo = 0u, hi = 0u;
+    for (uint i = 0u; i < 16u; i++) {
+        uint v = bc7_read(w, p, (i == 0u || bc7f_anchor(st.part, i) != 0u) ? ib - 1u : ib);
+        if (i < 8u) lo |= v << (i * 4u); else hi |= v << ((i - 8u) * 4u);
+    }
+    uint lo2 = lo, hi2 = hi;
+    if (ib2 != 0u) {
+        lo2 = 0u; hi2 = 0u;
+        for (uint i = 0u; i < 16u; i++) {
+            uint v = bc7_read(w, p, i == 0u ? ib2 - 1u : ib2);
+            if (i < 8u) lo2 |= v << (i * 4u); else hi2 |= v << ((i - 8u) * 4u);
         }
     }
+    /* mode 4 with the index selection bit set takes the colour from the 3-bit set */
+    st.ci0 = isel ? lo2 : lo; st.ci1 = isel ? hi2 : hi;
+    st.ai0 = isel ? lo : lo2; st.ai1 = isel ? hi : hi2;
+    st.cwt = bc7_wtab(isel ? ib2 : ib);
+    st.awt = bc7_wtab(isel ? ib : ib2 != 0u ? ib2 : ib);
     return st;
 }
 
-uvec4 decode_bc7_pixel(BC7State st, uint i) {
-    if (st.m > 7u) return uvec4(0u);
-    if (st.m == 0u) {
-        uint pv=get_p3(st.pid*16u+i), ts=pv&3u, ei=ts*2u;
-        uint tw=st.idx[i];
-        return uvec4(bc7_i3(st.e[ei].r,st.e[ei+1].r,tw), bc7_i3(st.e[ei].g,st.e[ei+1].g,tw), bc7_i3(st.e[ei].b,st.e[ei+1].b,tw), 255u);
+/* Per subset: 64 a + 32 and b - a for the four channels, so that a texel is
+ * (64 a + 32 + (b - a) w) >> 6 = (a (64 - w) + b w + 32) >> 6, in 16 bits (the sum stays in
+ * 32..16352).  Opaque modes get alpha 255 (64 * 255 + 32, step 0), invalid blocks zeros. */
+struct BC7P {
+    i16vec4 a64[3], d[3];
+    i16vec4 asel;        /* 1 for the channel that takes the alpha weight */
+};
+BC7P bc7p_prepare(BC7F st) {
+    BC7P q;
+    for (uint k = 0u; k < 3u; k++) {
+        ivec4 a = ivec4(st.e[2u * k]), b = ivec4(st.e[2u * k + 1u]);
+        if (st.opaque) { a.a = 255; b.a = 255; }
+        if (!st.valid) { a = ivec4(0); b = ivec4(0); }
+        q.a64[k] = i16vec4(a * 64 + 32);
+        q.d[k] = i16vec4(b - a);
     }
-    if (st.m == 1u) {
-        uint pv=get_p2(st.pid*16u+i), ts=pv&3u, ei=ts*2u;
-        uint tw=st.idx[i];
-        return uvec4(bc7_i3(st.e[ei].r,st.e[ei+1].r,tw), bc7_i3(st.e[ei].g,st.e[ei+1].g,tw), bc7_i3(st.e[ei].b,st.e[ei+1].b,tw), 255u);
+    /* modes 4/5 swap alpha with r, g or b after interpolating: swap the endpoint channels instead,
+     * and the weights with them */
+    if (st.rot != 0u) {
+        for (uint k = 0u; k < 3u; k++) {
+            if (st.rot == 1u) { q.a64[k] = q.a64[k].agbr; q.d[k] = q.d[k].agbr; }
+            else if (st.rot == 2u) { q.a64[k] = q.a64[k].rabg; q.d[k] = q.d[k].rabg; }
+            else { q.a64[k] = q.a64[k].rgab; q.d[k] = q.d[k].rgab; }
+        }
     }
-    if (st.m == 2u) {
-        uint pv=get_p3(st.pid*16u+i), ts=pv&3u, ei=ts*2u;
-        uint tw=st.idx[i];
-        return uvec4(bc7_i2(st.e[ei].r,st.e[ei+1].r,tw), bc7_i2(st.e[ei].g,st.e[ei+1].g,tw), bc7_i2(st.e[ei].b,st.e[ei+1].b,tw), 255u);
-    }
-    if (st.m == 3u) {
-        uint pv=get_p2(st.pid*16u+i), ts=pv&3u, ei=ts*2u;
-        uint tw=st.idx[i];
-        return uvec4(bc7_i2(st.e[ei].r,st.e[ei+1].r,tw), bc7_i2(st.e[ei].g,st.e[ei+1].g,tw), bc7_i2(st.e[ei].b,st.e[ei+1].b,tw), 255u);
-    }
-    if (st.m == 4u) {
-        uint c_v=st.idx[i] & 3u;
-        uint a_v=st.idx[i] >> 2u;
-        uint ic=st.isel!=0u?a_v:c_v, ia=st.isel!=0u?c_v:a_v;
-        uint r=st.isel!=0u?bc7_i3(st.e[0].r,st.e[1].r,ic):bc7_i2(st.e[0].r,st.e[1].r,ic);
-        uint g=st.isel!=0u?bc7_i3(st.e[0].g,st.e[1].g,ic):bc7_i2(st.e[0].g,st.e[1].g,ic);
-        uint b=st.isel!=0u?bc7_i3(st.e[0].b,st.e[1].b,ic):bc7_i2(st.e[0].b,st.e[1].b,ic);
-        uint a=st.isel!=0u?bc7_i2(st.e[0].a,st.e[1].a,ia):bc7_i3(st.e[0].a,st.e[1].a,ia);
-        if(st.rot==1u){uint t=a;a=r;r=t;} else if(st.rot==2u){uint t=a;a=g;g=t;} else if(st.rot==3u){uint t=a;a=b;b=t;}
-        return uvec4(r,g,b,a);
-    }
-    if (st.m == 5u) {
-        uint c_v=st.idx[i] & 3u, a_v=st.idx[i] >> 2u;
-        uint r=bc7_i2(st.e[0].r,st.e[1].r,c_v), g=bc7_i2(st.e[0].g,st.e[1].g,c_v), b=bc7_i2(st.e[0].b,st.e[1].b,c_v), a=bc7_i2(st.e[0].a,st.e[1].a,a_v);
-        if(st.rot==1u){uint t=a;a=r;r=t;} else if(st.rot==2u){uint t=a;a=g;g=t;} else if(st.rot==3u){uint t=a;a=b;b=t;}
-        return uvec4(r,g,b,a);
-    }
-    if (st.m == 6u) {
-        uint idx=st.idx[i];
-        return uvec4(bc7_i4(st.e[0].r,st.e[1].r,idx), bc7_i4(st.e[0].g,st.e[1].g,idx), bc7_i4(st.e[0].b,st.e[1].b,idx), bc7_i4(st.e[0].a,st.e[1].a,idx));
-    }
-    if (st.m == 7u) {
-        uint pv=get_p2(st.pid*16u+i), ts=pv&3u, ei=ts*2u;
-        uint tw=st.idx[i];
-        return uvec4(bc7_i2(st.e[ei].r,st.e[ei+1].r,tw), bc7_i2(st.e[ei].g,st.e[ei+1].g,tw), bc7_i2(st.e[ei].b,st.e[ei+1].b,tw), bc7_i2(st.e[ei].a,st.e[ei+1].a,tw));
-    }
-    return uvec4(0u);
+    q.asel = i16vec4(st.rot == 1u ? 1 : 0, st.rot == 2u ? 1 : 0, st.rot == 3u ? 1 : 0, st.rot == 0u ? 1 : 0);
+    return q;
 }
+uvec4 decode_bc7p(BC7F st, BC7P q, uint i) {
+    uint sub = (st.part[i >> 2u] >> ((i & 3u) * 8u)) & 3u;
+    i16vec4 a64 = sub == 0u ? q.a64[0] : sub == 1u ? q.a64[1] : q.a64[2];
+    i16vec4 d = sub == 0u ? q.d[0] : sub == 1u ? q.d[1] : q.d[2];
+    uint ci = ((i < 8u ? st.ci0 : st.ci1) >> ((i & 7u) * 4u)) & 15u;
+    uint ai = ((i < 8u ? st.ai0 : st.ai1) >> ((i & 7u) * 4u)) & 15u;
+    int16_t wc = int16_t((st.cwt.x * ci + st.cwt.y) >> st.cwt.z), wa = int16_t((st.awt.x * ai + st.awt.y) >> st.awt.z);
+    i16vec4 w = i16vec4(wc) + i16vec4(wa - wc) * q.asel;
+    return uvec4(u16vec4(d * w + a64) >> uint16_t(6));
+}
+
 uint astc_bitrev8(uint v) { v=((v&0x0Fu)<<4u)|((v>>4u)&0x0Fu); v=((v&0x33u)<<2u)|((v>>2u)&0x33u); v=((v&0x55u)<<1u)|((v>>1u)&0x55u); return v; }
 void astc_write(uint v, uint c, uint o, inout uvec4 b) {
     uint dword_idx = o >> 5u;
@@ -582,18 +584,21 @@ uint bc5_q5_pick(uvec4 lv, uint lv4, uint v) {
 
 /* Squared error of a channel with the given endpoints; also returns the
  * weight of every texel, three bits each (texels 0-7 in x, 8-15 in y), so
- * that the least-squares refit and the final encode do not pick them again. */
+ * that the least-squares refit and the final encode do not pick them again.
+ * The levels are bc5_q5_value, (e0 (4 - q) + e1 q + 2) >> 2 without the
+ * multiplications; each texel takes the minimum of (|level - v| << 3) | q,
+ * which is the nearest level, the lowest weight on a tie, as bc5_q5_pick. */
 uint bc5_q5_error(uint v[ASTC_BLOCK_TEXELS], uint e0, uint e1, out uvec2 picks) {
-    uvec4 lv = uvec4(bc5_q5_value(e0, e1, 0u), bc5_q5_value(e0, e1, 1u),
-                     bc5_q5_value(e0, e1, 2u), bc5_q5_value(e0, e1, 3u));
-    uint lv4 = bc5_q5_value(e0, e1, 4u);
+    uint l1 = (3u * e0 + e1 + 2u) >> 2u, l2 = (e0 + e1 + 1u) >> 1u, l3 = (e0 + 3u * e1 + 2u) >> 2u;
     uint total = 0u;
     picks = uvec2(0u);
     for (uint i = 0u; i < ASTC_BLOCK_TEXELS; i++) {
-        uint q = bc5_q5_pick(lv, lv4, v[i]);
-        uint level = q == 4u ? lv4 : lv[q];
-        int d = int(level) - int(v[i]);
-        total += uint(d * d);
+        int x = int(v[i]);
+        uint k = min(min(min(uint(abs(int(e0) - x)) << 3u, (uint(abs(int(l1) - x)) << 3u) | 1u),
+                         min((uint(abs(int(l2) - x)) << 3u) | 2u, (uint(abs(int(l3) - x)) << 3u) | 3u)),
+                     (uint(abs(int(e1) - x)) << 3u) | 4u);
+        uint q = k & 7u, d = min(k >> 3u, 255u);
+        total += d * d;
         if (i < 8u)
             picks.x |= q << (3u * i);
         else
@@ -634,8 +639,14 @@ uvec2 bc5_fit_channel(uint v[ASTC_BLOCK_TEXELS], out uvec2 best_picks) {
         float det = a * c - b * b;
         if (abs(det) < 1e-4)
             break;
-        e0 = uint(clamp(round((d * c - b * e) / det), 0.0, 255.0));
-        e1 = uint(clamp(round((a * e - b * d) / det), 0.0, 255.0));
+        uint n0 = uint(clamp(round((d * c - b * e) / det), 0.0, 255.0));
+        uint n1 = uint(clamp(round((a * e - b * d) / det), 0.0, 255.0));
+        /* The same endpoints again give the same weights and so the same refit: nothing changes
+         * any more. */
+        if (n0 == e0 && n1 == e1)
+            break;
+        e0 = n0;
+        e1 = n1;
         uint err = bc5_q5_error(v, e0, e1, picks);
         if (err < best_err) {
             best_err = err;
@@ -718,9 +729,13 @@ void main() {
        bc_block = fetched;
    }
 
-   BC7State bc7_st; BC6HState bc6h_st; BC4State bc4_st0, bc4_st1;
+   BC7F bc7_st; BC7P bc7_q; BC4State bc4_st0, bc4_st1;
+   BC6HState bc6h_st;
    if (PIPELINE_MODE == 2) {
-       if (pc.src_layout == SRC_BC7_RAW) bc7_st = parse_bc7(bc_block);
+       if (pc.src_layout == SRC_BC7_RAW) {
+           bc7_st = parse_bc7f(bc_block);
+           bc7_q = bc7p_prepare(bc7_st);
+       }
    } else if (PIPELINE_MODE == 1) {
 #if defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
        bc6h_st = parse_bc6h(bc_block, BC6H_SIGNED_MODE != 0u);
@@ -746,7 +761,7 @@ void main() {
        for (uint c = 0u; c < ASTC_BLOCK_WIDTH; c++) {
            uint idx = r * ASTC_BLOCK_WIDTH + c;
            if (PIPELINE_MODE == 2) {
-               if (pc.src_layout == SRC_BC7_RAW) s[idx] = decode_bc7_pixel(bc7_st, idx);
+               if (pc.src_layout == SRC_BC7_RAW) s[idx] = decode_bc7p(bc7_st, bc7_q, idx);
            } else if (PIPELINE_MODE == 1) {
 #if defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
                s[idx] = decode_bc6h_pixel(bc6h_st, idx);
