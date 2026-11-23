@@ -10,10 +10,12 @@
  *
  * Same interface as bc_astc_transcoder.glsl: one invocation per block,
  * binding 0 = plane 1 as R32G32B32A32_UINT, binding 1 = plane 0 as
- * R32G32_UINT (one texel per block).
+ * R32G32_UINT (one texel per block), or the memory a copy reads the blocks from (SRC_MEM).
  */
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -23,7 +25,11 @@ layout(push_constant) uniform PushConsts {
     uint height;
     uint src_layout;   /* unused here */
     int image_type;    /* VkImageType */
+    uint src_lo, src_hi;           /* SRC_MEM: address of the first block of the region */
+    uint row_pitch, slice_pitch;   /* SRC_MEM: in blocks */
 } pc;
+layout(constant_id = 3) const uint SRC_MEM = 0;
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer SrcBlocks { uvec2 b[]; };
 
 layout(set = 0, binding = 0) writeonly uniform uimage2DArray OutputImage2DArray;
 layout(set = 0, binding = 0) writeonly uniform uimage3D OutputImage3D;
@@ -36,8 +42,12 @@ void main() {
         return;
 
     ivec3 block = ivec3(gid) + pc.offset;
-    uvec2 bc4 = pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0).xy
-                                   : texelFetch(PayloadInput2DArray, block, 0).xy;
+    uvec2 bc4;
+    if (SRC_MEM != 0u)
+        bc4 = SrcBlocks(uvec2(pc.src_lo, pc.src_hi)).b[gid.z * pc.slice_pitch + gid.y * pc.row_pitch + gid.x];
+    else
+        bc4 = pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0).xy
+                                 : texelFetch(PayloadInput2DArray, block, 0).xy;
     uvec4 bc3 = uvec4(bc4, 0u, 0u);
 
     if (pc.image_type == 2)

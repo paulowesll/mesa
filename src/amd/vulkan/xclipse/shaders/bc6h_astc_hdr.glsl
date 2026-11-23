@@ -27,10 +27,13 @@
  *
  * Interface as bc_astc_transcoder.glsl: binding 0 = plane 1 as
  * R32G32B32A32_UINT (one texel per block), binding 1 = plane 0 as
- * R32G32B32A32_UINT; src_layout 0 = UFLOAT, 1 = SFLOAT.  Workgroups of 64 blocks along x.
+ * R32G32B32A32_UINT, or with SRC_MEM the memory a copy reads the blocks from;
+ * src_layout 0 = UFLOAT, 1 = SFLOAT.  Workgroups of 64 blocks along x.
  */
 #version 450
 #extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -40,7 +43,15 @@ layout(push_constant) uniform PushConsts {
     uint height;
     uint src_layout;
     int image_type;
+    uint src_lo, src_hi;           /* SRC_MEM: address of the first block of the region */
+    uint row_pitch, slice_pitch;   /* SRC_MEM: in blocks */
 } pc;
+
+/* 1: the BC6H blocks come from the memory a copy reads them from instead of
+ * plane 0, so the copy needs no barrier between writing plane 0 and
+ * transcoding. */
+layout(constant_id = 3) const uint SRC_MEM = 0u;
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SrcBlocks { uvec4 b[]; };
 
 layout(set = 0, binding = 0) writeonly uniform uimage2DArray OutputImage2DArray;
 layout(set = 0, binding = 0) writeonly uniform uimage3D OutputImage3D;
@@ -401,7 +412,11 @@ void main() {
     barrier();
     if (!inside)
         return;
-    uvec4 w = pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0) : texelFetch(PayloadInput2DArray, block, 0);
+    uvec4 w;
+    if (SRC_MEM != 0u)
+        w = SrcBlocks(uvec2(pc.src_lo, pc.src_hi)).b[bid.z * pc.slice_pitch + bid.y * pc.row_pitch + bid.x];
+    else
+        w = pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0) : texelFetch(PayloadInput2DArray, block, 0);
     bool is_signed = pc.src_layout == 1u;
 
     /* The texels: v = a + ((b - a) w + 32) >> 6 in the unquantised domain (Mesa

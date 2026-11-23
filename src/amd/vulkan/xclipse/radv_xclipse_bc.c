@@ -88,15 +88,25 @@ struct radv_xclipse_bc_state {
    /* Binding 0 is the output image (plane 1), binding 1 the compressed payload (plane 0). */
    VkDescriptorSetLayout ds_layout;
 
-   /* Decode push constants: ivec3 offset, int kind, int image type (20 bytes).
+   /* Decode push constants: ivec3 offset, int kind, int image type, then the source in memory
+    * (radv_xclipse_bc_src_push) (36 bytes).
     * Transcode push constants: ivec3 offset in blocks, uint width, height in texels, uint source
-    * layout, int image type (28 bytes).
+    * layout, int image type, then the source in memory (44 bytes).
     */
    VkPipelineLayout decode_layout;
    VkPipelineLayout transcode_layout;
 
    VkShaderModule modules[RADV_XCLIPSE_BC_NUM_PATHS];
-   VkPipeline pipelines[RADV_XCLIPSE_BC_NUM_PATHS];
+   /* [path][1]: specialised to read the blocks from memory (SRC_MEM) instead of plane 0. */
+   VkPipeline pipelines[RADV_XCLIPSE_BC_NUM_PATHS][2];
+};
+
+/* The end of the push constants of every shader: where the blocks of the region are in memory,
+ * for the pipelines that read them from there.
+ */
+struct radv_xclipse_bc_src_push {
+   uint32_t addr_lo, addr_hi;
+   uint32_t row_pitch, slice_pitch; /* in blocks */
 };
 
 static enum radv_xclipse_bc_path
@@ -191,7 +201,8 @@ radv_xclipse_bc_finish(struct radv_device *device)
       return;
 
    for (unsigned i = 0; i < RADV_XCLIPSE_BC_NUM_PATHS; i++) {
-      disp->DestroyPipeline(_device, bc->pipelines[i], alloc);
+      disp->DestroyPipeline(_device, bc->pipelines[i][0], alloc);
+      disp->DestroyPipeline(_device, bc->pipelines[i][1], alloc);
       disp->DestroyShaderModule(_device, bc->modules[i], alloc);
    }
    disp->DestroyPipelineLayout(_device, bc->decode_layout, alloc);
@@ -240,11 +251,11 @@ radv_xclipse_bc_init_ds_layout(struct radv_device *device, struct radv_xclipse_b
 /* Called with bc->mutex held. */
 static VkResult
 radv_xclipse_bc_create_pipeline(struct radv_device *device, struct radv_xclipse_bc_state *bc,
-                                enum radv_xclipse_bc_path path)
+                                enum radv_xclipse_bc_path path, bool src_mem, VkPipeline *pipeline)
 {
    const uint32_t *code = radv_xclipse_bc_shaders[path].code;
    const size_t code_size = radv_xclipse_bc_shaders[path].code_size;
-   const uint32_t push_size = path == RADV_XCLIPSE_BC_DECODE ? 20 : 28;
+   const uint32_t push_size = (path == RADV_XCLIPSE_BC_DECODE ? 20 : 28) + sizeof(struct radv_xclipse_bc_src_push);
    VkPipelineLayout *layout = path == RADV_XCLIPSE_BC_DECODE ? &bc->decode_layout : &bc->transcode_layout;
    VkShaderModule *module = &bc->modules[path];
    const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
@@ -284,6 +295,8 @@ radv_xclipse_bc_create_pipeline(struct radv_device *device, struct radv_xclipse_
          return result;
    }
 
+   /* Specialisation constant 3 of every shader: SRC_MEM. */
+   const uint32_t spec[2] = {radv_xclipse_bc_shaders[path].mode, src_mem};
    const VkComputePipelineCreateInfo pipeline_info = {
       .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
       .stage =
@@ -294,36 +307,40 @@ radv_xclipse_bc_create_pipeline(struct radv_device *device, struct radv_xclipse_
             .pName = "main",
             .pSpecializationInfo =
                &(VkSpecializationInfo){
-                  .mapEntryCount = 1,
-                  .pMapEntries = &(VkSpecializationMapEntry){.constantID = 0, .offset = 0, .size = 4},
-                  .dataSize = 4,
-                  .pData = &radv_xclipse_bc_shaders[path].mode,
+                  .mapEntryCount = 2,
+                  .pMapEntries =
+                     (VkSpecializationMapEntry[]){
+                        {.constantID = 0, .offset = 0, .size = 4},
+                        {.constantID = 3, .offset = 4, .size = 4},
+                     },
+                  .dataSize = sizeof(spec),
+                  .pData = spec,
                },
          },
       .layout = *layout,
    };
 
-   return disp->CreateComputePipelines(_device, device->meta_state.cache, 1, &pipeline_info, alloc,
-                                       &bc->pipelines[path]);
+   return disp->CreateComputePipelines(_device, device->meta_state.cache, 1, &pipeline_info, alloc, pipeline);
 }
 
 static VkPipeline
-radv_xclipse_bc_get_pipeline(struct radv_cmd_buffer *cmd_buffer, enum radv_xclipse_bc_path path)
+radv_xclipse_bc_get_pipeline(struct radv_cmd_buffer *cmd_buffer, enum radv_xclipse_bc_path path, bool src_mem)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
+   VkPipeline *pipeline = &bc->pipelines[path][src_mem];
    VkResult result = VK_SUCCESS;
 
    simple_mtx_lock(&bc->mutex);
-   if (!bc->pipelines[path])
-      result = radv_xclipse_bc_create_pipeline(device, bc, path);
+   if (!*pipeline)
+      result = radv_xclipse_bc_create_pipeline(device, bc, path, src_mem, pipeline);
    simple_mtx_unlock(&bc->mutex);
 
    if (result != VK_SUCCESS) {
       vk_command_buffer_set_error(&cmd_buffer->vk, result);
       return VK_NULL_HANDLE;
    }
-   return bc->pipelines[path];
+   return *pipeline;
 }
 
 static void
@@ -348,11 +365,12 @@ radv_xclipse_bc_bind_views(struct radv_cmd_buffer *cmd_buffer, VkPipelineLayout 
 
 static void
 radv_xclipse_bc_decode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_view *src, struct radv_image_view *dst,
-                       VkFormat format, const VkOffset3D *offset, const VkExtent3D *extent)
+                       VkFormat format, const VkOffset3D *offset, const VkExtent3D *extent,
+                       const struct radv_xclipse_bc_src_push *mem)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
-   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, RADV_XCLIPSE_BC_DECODE);
+   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, RADV_XCLIPSE_BC_DECODE, mem != NULL);
 
    if (pipeline == VK_NULL_HANDLE)
       return;
@@ -360,8 +378,16 @@ radv_xclipse_bc_decode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_vie
    radv_xclipse_bc_bind_views(cmd_buffer, bc->decode_layout, src, dst);
    radv_meta_bind_compute_pipeline(cmd_buffer, pipeline);
 
-   const uint32_t push_constants[5] = {
-      offset->x, offset->y, offset->z, radv_xclipse_bc_kind(format), src->image->vk.image_type,
+   const uint32_t push_constants[9] = {
+      offset->x,
+      offset->y,
+      offset->z,
+      radv_xclipse_bc_kind(format),
+      src->image->vk.image_type,
+      mem ? mem->addr_lo : 0,
+      mem ? mem->addr_hi : 0,
+      mem ? mem->row_pitch : 0,
+      mem ? mem->slice_pitch : 0,
    };
    radv_meta_push_constants(cmd_buffer, bc->decode_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
                             push_constants);
@@ -375,11 +401,12 @@ radv_xclipse_bc_decode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_vie
 static void
 radv_xclipse_bc_transcode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_view *src,
                           struct radv_image_view *dst, VkFormat format, enum radv_xclipse_bc_path path,
-                          const VkOffset3D *offset, const VkExtent3D *extent)
+                          const VkOffset3D *offset, const VkExtent3D *extent,
+                          const struct radv_xclipse_bc_src_push *mem)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
-   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, path);
+   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, path, mem != NULL);
 
    if (pipeline == VK_NULL_HANDLE)
       return;
@@ -388,11 +415,18 @@ radv_xclipse_bc_transcode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_
    radv_meta_bind_compute_pipeline(cmd_buffer, pipeline);
 
    /* Copies into block-compressed images are block aligned, except at the image edge. */
-   const uint32_t push_constants[7] = {
-      offset->x / 4, offset->y / 4,
-      offset->z,     extent->width,
-      extent->height, radv_xclipse_bc_src_layout(format),
+   const uint32_t push_constants[11] = {
+      offset->x / 4,
+      offset->y / 4,
+      offset->z,
+      extent->width,
+      extent->height,
+      radv_xclipse_bc_src_layout(format),
       src->image->vk.image_type,
+      mem ? mem->addr_lo : 0,
+      mem ? mem->addr_hi : 0,
+      mem ? mem->row_pitch : 0,
+      mem ? mem->slice_pitch : 0,
    };
    radv_meta_push_constants(cmd_buffer, bc->transcode_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
                             push_constants);
@@ -432,9 +466,10 @@ radv_xclipse_bc_init_view(struct radv_device *device, struct radv_image_view *iv
                         NULL);
 }
 
-void
-radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
-                    const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent)
+static void
+radv_xclipse_bc_convert(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
+                        const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent,
+                        const struct radv_xclipse_bc_src_push *mem)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const VkFormat format = image->vk.format;
@@ -465,10 +500,41 @@ radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image
                              VK_IMAGE_USAGE_2_STORAGE_BIT_KHR);
 
    if (path == RADV_XCLIPSE_BC_DECODE)
-      radv_xclipse_bc_decode(cmd_buffer, &src_iview, &dst_iview, format, &region_offset, &region_extent);
+      radv_xclipse_bc_decode(cmd_buffer, &src_iview, &dst_iview, format, &region_offset, &region_extent, mem);
    else
-      radv_xclipse_bc_transcode(cmd_buffer, &src_iview, &dst_iview, format, path, &region_offset, &region_extent);
+      radv_xclipse_bc_transcode(cmd_buffer, &src_iview, &dst_iview, format, path, &region_offset, &region_extent,
+                                mem);
 
    radv_image_view_finish(&src_iview);
    radv_image_view_finish(&dst_iview);
+}
+
+/* Converts the blocks of plane 0 that a copy wrote. */
+void
+radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
+                    const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent)
+{
+   radv_xclipse_bc_convert(cmd_buffer, image, layout, subresource, offset, extent, NULL);
+}
+
+/* Converts the blocks of a copy from memory into plane 1, reading them where the copy reads them
+ * from.  Nothing waits for plane 0 then, so the copy needs no barrier, and copies that follow one
+ * another overlap instead of each waiting for the previous conversion, which made uploads of many
+ * small textures two to four times slower.
+ */
+void
+radv_meta_decode_bc_from_memory(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
+                                const VkDeviceMemoryImageCopyKHR *region)
+{
+   const struct vk_image_buffer_layout buf_layout = vk_image_memory_copy_layout(&image->vk, region);
+   const uint64_t addr = region->addressRange.address;
+   const struct radv_xclipse_bc_src_push mem = {
+      .addr_lo = addr,
+      .addr_hi = addr >> 32,
+      .row_pitch = buf_layout.row_stride_B / buf_layout.element_size_B,
+      .slice_pitch = buf_layout.image_stride_B / buf_layout.element_size_B,
+   };
+
+   radv_xclipse_bc_convert(cmd_buffer, image, region->imageLayout, &region->imageSubresource, region->imageOffset,
+                           region->imageExtent, &mem);
 }

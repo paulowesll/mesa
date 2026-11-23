@@ -39,6 +39,8 @@ precision highp uimage3D;
 precision highp utexture3D;
 
 #extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -51,7 +53,15 @@ layout(push_constant) uniform Registers {
     ivec3 offset;
     int vk_format;
     int vk_image_type;
+    uint src_lo, src_hi;           /* SRC_MEM: address of the first block of the region */
+    uint row_pitch, slice_pitch;   /* SRC_MEM: in blocks */
 } registers;
+
+/* 1: the BC blocks come from the memory a copy reads them from instead of plane 0, so the copy
+ * needs no barrier between writing plane 0 and decoding. */
+layout(constant_id = 3) const uint SRC_MEM = 0u;
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SrcBlocks16 { uvec4 b[]; };
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer SrcBlocks8 { uvec2 b[]; };
 
 /* Mirrors the source layout enum of the wrapper shader. */
 #define BC_FMT_BC4_UNORM 0
@@ -311,8 +321,17 @@ void main()
     bool is_3d = registers.vk_image_type == 2; /* VK_IMAGE_TYPE_3D */
 
     ivec3 block = ivec3(coord.x >> 2, coord.y >> 2, coord.z);
-    uvec4 payload = is_3d ? texelFetch(PayloadInput3D, block, 0)
-                          : texelFetch(PayloadInput2DArray, block, 0);
+    uvec4 payload;
+    if (SRC_MEM != 0u) {
+        /* the region starts on a block */
+        uvec3 r = uvec3(block - ivec3(registers.offset.x >> 2, registers.offset.y >> 2, registers.offset.z));
+        uint i = r.z * registers.slice_pitch + r.y * registers.row_pitch + r.x;
+        uvec2 src = uvec2(registers.src_lo, registers.src_hi);
+        payload = registers.vk_format <= BC_FMT_BC4_SNORM ? uvec4(SrcBlocks8(src).b[i], 0u, 0u) : SrcBlocks16(src).b[i];
+    } else {
+        payload = is_3d ? texelFetch(PayloadInput3D, block, 0)
+                        : texelFetch(PayloadInput2DArray, block, 0);
+    }
 
     uint texel = uint((coord.y & 3) * 4 + (coord.x & 3));
     uvec4 color = decode_texel(payload, texel);

@@ -358,10 +358,19 @@ void radv_meta_decode_astc(struct radv_cmd_buffer *cmd_buffer, struct radv_image
 #if RADV_XCLIPSE
 void radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
                          const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent);
+void radv_meta_decode_bc_from_memory(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
+                                     const VkDeviceMemoryImageCopyKHR *region);
 #else
 static inline void
 radv_meta_decode_bc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
                     const VkImageSubresourceLayers *subresource, VkOffset3D offset, VkExtent3D extent)
+{
+   UNREACHABLE("BC formats are only emulated on Xclipse");
+}
+
+static inline void
+radv_meta_decode_bc_from_memory(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
+                                const VkDeviceMemoryImageCopyKHR *region)
 {
    UNREACHABLE("BC formats are only emulated on Xclipse");
 }

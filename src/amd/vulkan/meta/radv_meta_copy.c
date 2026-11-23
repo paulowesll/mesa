@@ -328,6 +328,32 @@ gfx_or_compute_copy_memory_to_image(struct radv_cmd_buffer *cmd_buffer, VkAddres
    }
 }
 
+/* Xclipse emulates BC4-BC7 with a converted plane 1 (radv_bc_emulation_format), which a copy from
+ * memory converts by reading the blocks from that memory: nothing has to wait for plane 0.
+ */
+static bool
+radv_bc_converts_from_memory(const struct radv_cmd_buffer *cmd_buffer, const struct radv_image *image)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(radv_cmd_buffer_device(cmd_buffer));
+
+   return cmd_buffer->qf != RADV_QUEUE_TRANSFER && radv_bc_emulation_format(pdev, image->vk.format) != VK_FORMAT_UNDEFINED;
+}
+
+static void
+radv_copy_memory_to_bc_image(struct radv_cmd_buffer *cmd_buffer, VkAddressCopyFlagsKHR copy_flags,
+                             struct radv_image *image, const VkDeviceMemoryImageCopyKHR *region)
+{
+   /* Without its own BC payload (transcoded in place), the image only takes the converted blocks. */
+   if (!image->bc_in_place) {
+      const struct radv_physical_device *pdev = radv_device_physical(radv_cmd_buffer_device(cmd_buffer));
+      const bool use_compute = cmd_buffer->qf == RADV_QUEUE_COMPUTE || !radv_image_is_renderable(image) ||
+                               pdev->drirc.performance.image_meta_path == RADV_IMAGE_META_PATH_COMPUTE;
+      gfx_or_compute_copy_memory_to_image(cmd_buffer, copy_flags, image, region, use_compute);
+   }
+
+   radv_meta_decode_bc_from_memory(cmd_buffer, image, region);
+}
+
 VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToImageInfo2 *pCopyBufferToImageInfo)
 {
@@ -345,6 +371,8 @@ radv_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToIm
    radv_meta_begin(cmd_buffer);
 
    radv_cs_add_buffer(device->ws, cs->b, src_buffer->bo);
+
+   const bool bc_from_memory = radv_bc_converts_from_memory(cmd_buffer, dst_image);
 
    for (unsigned r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
       const VkBufferImageCopy2 *region = &pCopyBufferToImageInfo->pRegions[r];
@@ -364,6 +392,11 @@ radv_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToIm
          .imageExtent = region->imageExtent,
       };
 
+      if (bc_from_memory) {
+         radv_copy_memory_to_bc_image(cmd_buffer, src_copy_flags, dst_image, &copy);
+         continue;
+      }
+
       if (cmd_buffer->qf == RADV_QUEUE_TRANSFER) {
          transfer_copy_memory_image(cmd_buffer, src_copy_flags, dst_image, &copy, true);
       } else {
@@ -374,7 +407,8 @@ radv_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer, const VkCopyBufferToIm
       }
    }
 
-   if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER) {
+   if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER &&
+       !bc_from_memory) {
       cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_SYNC_PS |
                                       radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                                             VK_ACCESS_2_TRANSFER_WRITE_BIT, 0, dst_image, NULL) |
@@ -420,6 +454,8 @@ radv_CmdCopyMemoryToImageKHR(VkCommandBuffer commandBuffer, const VkCopyDeviceMe
 
    radv_meta_begin(cmd_buffer);
 
+   const bool bc_from_memory = radv_bc_converts_from_memory(cmd_buffer, dst_image);
+
    for (unsigned r = 0; r < pCopyMemoryInfo->regionCount; r++) {
       const VkDeviceMemoryImageCopyKHR *region = &pCopyMemoryInfo->pRegions[r];
       const VkImageAspectFlags aspect_mask = region->imageSubresource.aspectMask;
@@ -428,6 +464,11 @@ radv_CmdCopyMemoryToImageKHR(VkCommandBuffer commandBuffer, const VkCopyDeviceMe
       radv_cs_add_buffer(device->ws, cs->b, dst_image->bindings[bind_idx].bo);
 
       VkAddressCopyFlagsKHR copy_flags = radv_get_copy_flags_from_command_flags(region->addressFlags);
+
+      if (bc_from_memory) {
+         radv_copy_memory_to_bc_image(cmd_buffer, copy_flags, dst_image, region);
+         continue;
+      }
 
       if (cmd_buffer->qf == RADV_QUEUE_TRANSFER) {
          transfer_copy_memory_image(cmd_buffer, copy_flags, dst_image, region, true);
@@ -438,7 +479,8 @@ radv_CmdCopyMemoryToImageKHR(VkCommandBuffer commandBuffer, const VkCopyDeviceMe
       }
    }
 
-   if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER) {
+   if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER &&
+       !bc_from_memory) {
       cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_SYNC_PS |
                                       radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                                             VK_ACCESS_TRANSFER_WRITE_BIT, 0, dst_image, NULL) |

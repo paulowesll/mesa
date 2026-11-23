@@ -35,6 +35,8 @@
 #extension GL_EXT_shader_8bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 #ifndef XCLIPSE_ASTC_LOCAL_SIZE_X
 #define XCLIPSE_ASTC_LOCAL_SIZE_X 8
 #endif
@@ -66,7 +68,13 @@ layout(push_constant) uniform PushConsts {
     uint height;
     uint src_layout;   /* SRC_* below */
     int image_type;    /* VkImageType */
+    uint src_lo, src_hi;           /* SRC_MEM: address of the first block of the region */
+    uint row_pitch, slice_pitch;   /* SRC_MEM: in blocks */
 } pc;
+/* 1: the BC blocks come from the memory a copy reads them from instead of plane 0, so the copy
+ * needs no barrier between writing plane 0 and transcoding. */
+layout(constant_id = 3) const uint SRC_MEM = 0;
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SrcBlocks { uvec4 b[]; };
 /* Same binding order as bc_decoder.glsl: 0 = output, 1 = compressed input. */
 layout(set = 0, binding = 0) writeonly uniform uimage2DArray OutputImage2DArray;
 layout(set = 0, binding = 0) writeonly uniform uimage3D OutputImage3D;
@@ -74,6 +82,10 @@ layout(set = 0, binding = 1) uniform utexture2DArray PayloadInput2DArray;
 layout(set = 0, binding = 1) uniform utexture3D PayloadInput3D;
 
 uvec4 fetch_block(ivec3 block) {
+    if (SRC_MEM != 0u) {
+        uvec3 r = uvec3(block - pc.offset);
+        return SrcBlocks(uvec2(pc.src_lo, pc.src_hi)).b[r.z * pc.slice_pitch + r.y * pc.row_pitch + r.x];
+    }
     return pc.image_type == 2 ? texelFetch(PayloadInput3D, block, 0)
                               : texelFetch(PayloadInput2DArray, block, 0);
 }
