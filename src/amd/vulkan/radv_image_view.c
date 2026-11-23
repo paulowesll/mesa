@@ -222,7 +222,10 @@ compute_non_block_compressed_view(struct radv_device *device, const struct radv_
 {
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_image *image = iview->image;
-   const struct radeon_surf *surf = &image->planes[0].surface;
+   /* The plane of the view: on Xclipse, plane 1 of an emulated BC image is block-compressed too and
+    * does not always have the layout of plane 0.
+    */
+   const struct radeon_surf *surf = &image->planes[iview->plane_id].surface;
    struct ac_surf_info surf_info = radv_get_ac_surf_info(device, image);
 
    ac_surface_compute_nbc_view(pdev->addrlib, &pdev->info, surf, &surf_info, iview->vk.base_mip_level,
