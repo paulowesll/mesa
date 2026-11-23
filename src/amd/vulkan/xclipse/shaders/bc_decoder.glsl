@@ -60,6 +60,9 @@ layout(push_constant) uniform Registers {
 /* 1: the BC blocks come from the memory a copy reads them from instead of plane 0, so the copy
  * needs no barrier between writing plane 0 and decoding. */
 layout(constant_id = 3) const uint SRC_MEM = 0u;
+/* The kind of block (BC_FMT_* below), one pipeline each: with it as a push constant the pipeline
+ * held the decoders of every kind, and compiling it took seconds. */
+layout(constant_id = 0) const int KIND = 0;
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SrcBlocks16 { uvec4 b[]; };
 layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer SrcBlocks8 { uvec2 b[]; };
 
@@ -115,6 +118,9 @@ uint decode_bc4_pixel(BC4State st, uint i) {
     else idx = (st.w1 >> (b - 32u)) & 7u;
     return st.p[idx];
 }
+/* BC_DECODE_BC45_ONLY builds the BC4/BC5 decoder alone, which compiles in a fraction of the time
+ * of the module with the BC7 and BC6H decoders. */
+#ifndef BC_DECODE_BC45_ONLY
 uint bc_mask(uint c) { return c >= 32u ? 0xffffffffu : ((1u << c) - 1u); }
 uint bc7_read(uvec4 w, inout uint p, uint c) {
     if (c == 0u) return 0u;
@@ -298,17 +304,21 @@ uvec4 decode_bc7_pixel(BC7State st, uint i) {
     return uvec4(0u);
 }
 
+#else
+int bc6h_extend_sign(int val, uint bits) { return (val << (32u - bits)) >> (32u - bits); }
+#endif
+
 uvec4 decode_texel(uvec4 payload, uint texel)
 {
-    if (registers.vk_format == BC_FMT_BC7)
+#ifndef BC_DECODE_BC45_ONLY
+    if (KIND == BC_FMT_BC7)
         return decode_bc7_pixel(parse_bc7(payload), texel);
+#endif
 
-    bool is_signed = registers.vk_format == BC_FMT_BC4_SNORM ||
-                     registers.vk_format == BC_FMT_BC5_SNORM;
+    bool is_signed = KIND == BC_FMT_BC4_SNORM || KIND == BC_FMT_BC5_SNORM;
     uint r = decode_bc4_pixel(parse_bc4(payload.x, payload.y, is_signed), texel);
 
-    if (registers.vk_format == BC_FMT_BC5_UNORM ||
-        registers.vk_format == BC_FMT_BC5_SNORM) {
+    if (KIND == BC_FMT_BC5_UNORM || KIND == BC_FMT_BC5_SNORM) {
         uint g = decode_bc4_pixel(parse_bc4(payload.z, payload.w, is_signed), texel);
         return uvec4(r, g, 0u, 255u);
     }
@@ -327,7 +337,7 @@ void main()
         uvec3 r = uvec3(block - ivec3(registers.offset.x >> 2, registers.offset.y >> 2, registers.offset.z));
         uint i = r.z * registers.slice_pitch + r.y * registers.row_pitch + r.x;
         uvec2 src = uvec2(registers.src_lo, registers.src_hi);
-        payload = registers.vk_format <= BC_FMT_BC4_SNORM ? uvec4(SrcBlocks8(src).b[i], 0u, 0u) : SrcBlocks16(src).b[i];
+        payload = KIND <= BC_FMT_BC4_SNORM ? uvec4(SrcBlocks8(src).b[i], 0u, 0u) : SrcBlocks16(src).b[i];
     } else {
         payload = is_3d ? texelFetch(PayloadInput3D, block, 0)
                         : texelFetch(PayloadInput2DArray, block, 0);

@@ -31,6 +31,13 @@ static const uint32_t bc_decoder_spv[] = {
 #include "bc_decoder_spv.h"
 };
 
+/* The same decoder with only the BC4/BC5 kinds, which compiles in milliseconds instead of a
+ * fraction of a second.
+ */
+static const uint32_t bc45_decoder_spv[] = {
+#include "bc45_decoder_spv.h"
+};
+
 static const uint32_t bc4_bc3_spv[] = {
 #include "bc4_bc3_spv.h"
 };
@@ -80,6 +87,7 @@ enum radv_xclipse_bc_kind {
    RADV_XCLIPSE_BC5_UNORM = 2,
    RADV_XCLIPSE_BC5_SNORM = 3,
    RADV_XCLIPSE_BC7 = 4,
+   RADV_XCLIPSE_BC_NUM_KINDS,
 };
 
 struct radv_xclipse_bc_state {
@@ -97,8 +105,12 @@ struct radv_xclipse_bc_state {
    VkPipelineLayout transcode_layout;
 
    VkShaderModule modules[RADV_XCLIPSE_BC_NUM_PATHS];
-   /* [path][1]: specialised to read the blocks from memory (SRC_MEM) instead of plane 0. */
+   VkShaderModule bc45_decoder_module;
+   /* [path][1]: specialised to read the blocks from memory (SRC_MEM) instead of plane 0.  The
+    * decoder has one pipeline per kind of block (decode_pipelines[kind]) instead.
+    */
    VkPipeline pipelines[RADV_XCLIPSE_BC_NUM_PATHS][2];
+   VkPipeline decode_pipelines[RADV_XCLIPSE_BC_NUM_KINDS][2];
 };
 
 /* The end of the push constants of every shader: where the blocks of the region are in memory,
@@ -205,6 +217,11 @@ radv_xclipse_bc_finish(struct radv_device *device)
       disp->DestroyPipeline(_device, bc->pipelines[i][1], alloc);
       disp->DestroyShaderModule(_device, bc->modules[i], alloc);
    }
+   for (unsigned i = 0; i < RADV_XCLIPSE_BC_NUM_KINDS; i++) {
+      disp->DestroyPipeline(_device, bc->decode_pipelines[i][0], alloc);
+      disp->DestroyPipeline(_device, bc->decode_pipelines[i][1], alloc);
+   }
+   disp->DestroyShaderModule(_device, bc->bc45_decoder_module, alloc);
    disp->DestroyPipelineLayout(_device, bc->decode_layout, alloc);
    disp->DestroyPipelineLayout(_device, bc->transcode_layout, alloc);
    disp->DestroyDescriptorSetLayout(_device, bc->ds_layout, alloc);
@@ -251,13 +268,14 @@ radv_xclipse_bc_init_ds_layout(struct radv_device *device, struct radv_xclipse_b
 /* Called with bc->mutex held. */
 static VkResult
 radv_xclipse_bc_create_pipeline(struct radv_device *device, struct radv_xclipse_bc_state *bc,
-                                enum radv_xclipse_bc_path path, bool src_mem, VkPipeline *pipeline)
+                                enum radv_xclipse_bc_path path, bool src_mem, uint32_t kind, VkPipeline *pipeline)
 {
-   const uint32_t *code = radv_xclipse_bc_shaders[path].code;
-   const size_t code_size = radv_xclipse_bc_shaders[path].code_size;
+   const bool bc45 = path == RADV_XCLIPSE_BC_DECODE && kind <= RADV_XCLIPSE_BC5_SNORM;
+   const uint32_t *code = bc45 ? bc45_decoder_spv : radv_xclipse_bc_shaders[path].code;
+   const size_t code_size = bc45 ? sizeof(bc45_decoder_spv) : radv_xclipse_bc_shaders[path].code_size;
    const uint32_t push_size = (path == RADV_XCLIPSE_BC_DECODE ? 20 : 28) + sizeof(struct radv_xclipse_bc_src_push);
    VkPipelineLayout *layout = path == RADV_XCLIPSE_BC_DECODE ? &bc->decode_layout : &bc->transcode_layout;
-   VkShaderModule *module = &bc->modules[path];
+   VkShaderModule *module = bc45 ? &bc->bc45_decoder_module : &bc->modules[path];
    const struct vk_device_dispatch_table *disp = &device->vk.dispatch_table;
    const VkAllocationCallbacks *alloc = &device->meta_state.alloc;
    VkDevice _device = radv_device_to_handle(device);
@@ -295,8 +313,10 @@ radv_xclipse_bc_create_pipeline(struct radv_device *device, struct radv_xclipse_
          return result;
    }
 
-   /* Specialisation constant 3 of every shader: SRC_MEM. */
-   const uint32_t spec[2] = {radv_xclipse_bc_shaders[path].mode, src_mem};
+   /* Specialisation constant 3 of every shader: SRC_MEM; constant 0 is the kind of block for the
+    * decoder.
+    */
+   const uint32_t spec[2] = {path == RADV_XCLIPSE_BC_DECODE ? kind : radv_xclipse_bc_shaders[path].mode, src_mem};
    const VkComputePipelineCreateInfo pipeline_info = {
       .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
       .stage =
@@ -324,16 +344,18 @@ radv_xclipse_bc_create_pipeline(struct radv_device *device, struct radv_xclipse_
 }
 
 static VkPipeline
-radv_xclipse_bc_get_pipeline(struct radv_cmd_buffer *cmd_buffer, enum radv_xclipse_bc_path path, bool src_mem)
+radv_xclipse_bc_get_pipeline(struct radv_cmd_buffer *cmd_buffer, enum radv_xclipse_bc_path path, bool src_mem,
+                             enum radv_xclipse_bc_kind kind)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
-   VkPipeline *pipeline = &bc->pipelines[path][src_mem];
+   VkPipeline *pipeline =
+      path == RADV_XCLIPSE_BC_DECODE ? &bc->decode_pipelines[kind][src_mem] : &bc->pipelines[path][src_mem];
    VkResult result = VK_SUCCESS;
 
    simple_mtx_lock(&bc->mutex);
    if (!*pipeline)
-      result = radv_xclipse_bc_create_pipeline(device, bc, path, src_mem, pipeline);
+      result = radv_xclipse_bc_create_pipeline(device, bc, path, src_mem, kind, pipeline);
    simple_mtx_unlock(&bc->mutex);
 
    if (result != VK_SUCCESS) {
@@ -370,7 +392,8 @@ radv_xclipse_bc_decode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_vie
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
-   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, RADV_XCLIPSE_BC_DECODE, mem != NULL);
+   VkPipeline pipeline =
+      radv_xclipse_bc_get_pipeline(cmd_buffer, RADV_XCLIPSE_BC_DECODE, mem != NULL, radv_xclipse_bc_kind(format));
 
    if (pipeline == VK_NULL_HANDLE)
       return;
@@ -406,7 +429,7 @@ radv_xclipse_bc_transcode(struct radv_cmd_buffer *cmd_buffer, struct radv_image_
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_xclipse_bc_state *bc = device->meta_state.xclipse_bc;
-   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, path, mem != NULL);
+   VkPipeline pipeline = radv_xclipse_bc_get_pipeline(cmd_buffer, path, mem != NULL, 0);
 
    if (pipeline == VK_NULL_HANDLE)
       return;

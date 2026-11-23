@@ -305,6 +305,7 @@ if get_option('radv-xclipse')
   )
 
   foreach s : [
+    ['bc45_decoder_spv.h', 'xclipse/shaders/bc_decoder.glsl', ['-DBC_DECODE_BC45_ONLY']],
     ['bc4_bc3_spv.h', 'xclipse/shaders/bc4_bc3_repack.glsl', []],
     ['bc_astc_spv.h', 'xclipse/shaders/bc_astc_transcoder.glsl', []],
     ['bc_astc_quality_spv.h', 'xclipse/shaders/bc_astc_transcoder.glsl',

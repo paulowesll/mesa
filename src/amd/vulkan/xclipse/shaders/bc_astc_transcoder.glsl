@@ -195,6 +195,9 @@ int bc7_w(int a, int b, uint w);
 uint bc7_i2(uint a, uint b, uint i);
 uint bc7_i3(uint a, uint b, uint i);
 uint bc7_i4(uint a, uint b, uint i);
+/* The BC6H path of the wrapper (PIPELINE_MODE 1).  RADV converts BC6H with bc6h_astc_hdr.glsl,
+ * which copies this parser; left out of RADV's builds, where it only made compiling slower. */
+#if defined(XCLIPSE_ASTC_BC6H_PATH) || defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
 struct BC6HState {
     uint m_idx, partition_index;
     int r[4], g[4], b[4];
@@ -250,6 +253,7 @@ uvec4 decode_bc6h_pixel(BC6HState st, uint i) {
         255u
     );
 }
+#endif
 
 uvec4 bc7_exp(uvec4 e, uint b) { if (b >= 8u) return e; uint s = 8u - b; return (e << s) | (e >> (b - s)); }
 uint bc7_w(uint a, uint b, uint w) { return (a * (64u - w) + b * w + 32u) >> 6u; }
@@ -730,18 +734,22 @@ void main() {
    }
 
    BC7F bc7_st; BC7P bc7_q; BC4State bc4_st0, bc4_st1;
+#if defined(XCLIPSE_ASTC_BC6H_PATH) || defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
    BC6HState bc6h_st;
+#endif
    if (PIPELINE_MODE == 2) {
        if (pc.src_layout == SRC_BC7_RAW) {
            bc7_st = parse_bc7f(bc_block);
            bc7_q = bc7p_prepare(bc7_st);
        }
+#if defined(XCLIPSE_ASTC_BC6H_PATH) || defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
    } else if (PIPELINE_MODE == 1) {
 #if defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
        bc6h_st = parse_bc6h(bc_block, BC6H_SIGNED_MODE != 0u);
 #else
        if (pc.src_layout == SRC_BC6H_UFLOAT || pc.src_layout == SRC_BC6H_SFLOAT)
            bc6h_st = parse_bc6h(bc_block, pc.src_layout == SRC_BC6H_SFLOAT);
+#endif
 #endif
    } else {
        if (PIPELINE_MODE != 3u &&
@@ -762,11 +770,13 @@ void main() {
            uint idx = r * ASTC_BLOCK_WIDTH + c;
            if (PIPELINE_MODE == 2) {
                if (pc.src_layout == SRC_BC7_RAW) s[idx] = decode_bc7p(bc7_st, bc7_q, idx);
+#if defined(XCLIPSE_ASTC_BC6H_PATH) || defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
            } else if (PIPELINE_MODE == 1) {
 #if defined(XCLIPSE_ASTC_BC6H_SPECIALIZED)
                s[idx] = decode_bc6h_pixel(bc6h_st, idx);
 #else
                if (pc.src_layout == SRC_BC6H_UFLOAT || pc.src_layout == SRC_BC6H_SFLOAT) s[idx] = decode_bc6h_pixel(bc6h_st, idx);
+#endif
 #endif
            } else {
                if (PIPELINE_MODE != 3u &&
