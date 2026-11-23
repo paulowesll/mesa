@@ -339,12 +339,67 @@ radv_bc_converts_from_memory(const struct radv_cmd_buffer *cmd_buffer, const str
    return cmd_buffer->qf != RADV_QUEUE_TRANSFER && radv_bc_emulation_format(pdev, image->vk.format) != VK_FORMAT_UNDEFINED;
 }
 
+/* A BC4_UNORM image without a payload plane (radv_bc4_keeps_payload_in_bc3): the BC4 block of each
+ * texel block is the first half of the BC3 block of plane 1, read and written as a
+ * R32G32B32A32_UINT texel whose first two components the other side of the copy takes.
+ */
+static void
+radv_bc4_blocks_in_bc3_plane(struct radv_meta_blit2d_surf *surf)
+{
+   surf->aspect_mask = VK_IMAGE_ASPECT_PLANE_1_BIT;
+   surf->format = VK_FORMAT_R32G32B32A32_UINT;
+   surf->bs = 16;
+}
+
+/* The surfaces of an image copy where one side is such a BC4 image.  The other side moves its 8-byte
+ * texels as R32G32_UINT, which carries those two 32-bit components unchanged; vk_format_for_size(8)
+ * has 16-bit channels and would clamp them.  DCC that does not take R32G32_UINT is decompressed
+ * first.
+ */
+static void
+radv_bc4_copy_surface(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image, VkImageLayout layout,
+                      const VkImageSubresourceLayers *subres, struct radv_meta_blit2d_surf *surf)
+{
+   struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   bool sign_reinterpret = false;
+
+   if (image->bc4_in_bc3) {
+      radv_bc4_blocks_in_bc3_plane(surf);
+      return;
+   }
+
+   assert(vk_format_get_blocksize(surf->format) == 8);
+
+   if (radv_layout_dcc_compressed(device, image, subres->mipLevel, layout,
+                                  radv_image_queue_family_mask(image, cmd_buffer->qf)) &&
+       (!radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), surf->format, VK_FORMAT_R32G32_UINT,
+                                     &sign_reinterpret) ||
+        sign_reinterpret)) {
+      radv_describe_barrier_start(cmd_buffer, RGP_BARRIER_UNKNOWN_REASON);
+      radv_decompress_dcc(cmd_buffer, image,
+                          &(VkImageSubresourceRange){
+                             .aspectMask = subres->aspectMask,
+                             .baseMipLevel = subres->mipLevel,
+                             .levelCount = 1,
+                             .baseArrayLayer = subres->baseArrayLayer,
+                             .layerCount = vk_image_subresource_layer_count(&image->vk, subres),
+                          });
+      surf->disable_compression = true;
+      radv_describe_barrier_end(cmd_buffer);
+   }
+
+   surf->format = VK_FORMAT_R32G32_UINT;
+}
+
 static void
 radv_copy_memory_to_bc_image(struct radv_cmd_buffer *cmd_buffer, VkAddressCopyFlagsKHR copy_flags,
                              struct radv_image *image, const VkDeviceMemoryImageCopyKHR *region)
 {
-   /* Without its own BC payload (transcoded in place), the image only takes the converted blocks. */
-   if (!image->bc_in_place) {
+   /* Without its own BC payload (transcoded in place, or BC4 kept in the BC3 plane), the image only
+    * takes the converted blocks.
+    */
+   if (!image->bc_in_place && !image->bc4_in_bc3) {
       const struct radv_physical_device *pdev = radv_device_physical(radv_cmd_buffer_device(cmd_buffer));
       const bool use_compute = cmd_buffer->qf == RADV_QUEUE_COMPUTE || !radv_image_is_renderable(image) ||
                                pdev->drirc.performance.image_meta_path == RADV_IMAGE_META_PATH_COMPUTE;
@@ -572,6 +627,13 @@ compute_copy_image_to_memory(struct radv_cmd_buffer *cmd_buffer, VkAddressCopyFl
       .pitch = buf_extent_el.width,
       .copy_flags = dst_copy_flags,
    };
+   /* the size of the elements in memory */
+   const unsigned buf_bs = img_info.bs;
+
+   if (image->bc4_in_bc3) {
+      radv_bc4_blocks_in_bc3_plane(&img_info);
+      buf_info.format = VK_FORMAT_R32G32_UINT;
+   }
 
    if (image->vk.image_type == VK_IMAGE_TYPE_3D)
       img_info.layer = img_offset_el.z;
@@ -584,7 +646,7 @@ compute_copy_image_to_memory(struct radv_cmd_buffer *cmd_buffer, VkAddressCopyFl
       /* Perform Blit */
       radv_meta_image_to_buffer(cmd_buffer, &img_info, &buf_info, &img_offset_el, &img_extent_el);
 
-      buf_info.offset += buf_extent_el.width * buf_extent_el.height * img_info.bs;
+      buf_info.offset += buf_extent_el.width * buf_extent_el.height * buf_bs;
       img_info.layer++;
       if (image->vk.image_type == VK_IMAGE_TYPE_3D)
          slice_3d++;
@@ -804,7 +866,10 @@ gfx_or_compute_copy_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image 
       radv_layout_dcc_compressed(device, src_image, region->srcSubresource.mipLevel, src_image_layout, src_queue_mask);
    bool need_dcc_sign_reinterpret = false;
 
-   if (!src_compressed ||
+   if (src_image->bc4_in_bc3 || dst_image->bc4_in_bc3) {
+      radv_bc4_copy_surface(cmd_buffer, src_image, src_image_layout, &region->srcSubresource, &b_src);
+      radv_bc4_copy_surface(cmd_buffer, dst_image, dst_image_layout, &region->dstSubresource, &b_dst);
+   } else if (!src_compressed ||
        (radv_dcc_formats_compatible(radv_dcc_compat_gfx_level(pdev), b_src.format, b_dst.format, &need_dcc_sign_reinterpret) &&
         !need_dcc_sign_reinterpret)) {
       b_src.format = b_dst.format;
@@ -926,9 +991,12 @@ radv_CmdCopyImage2(VkCommandBuffer commandBuffer, const VkCopyImageInfo2 *pCopyI
       }
    }
 
-   /* Xclipse BC transcoded in place: the copy moved ASTC blocks, which the destination samples as is. */
-   const bool copied_transcoded = src_image->bc_in_place && dst_image->bc_in_place &&
-                                  vk_format_no_srgb(src_image->vk.format) == vk_format_no_srgb(dst_image->vk.format);
+   /* Xclipse BC transcoded in place: the copy moved ASTC blocks, which the destination samples as is.
+    * A BC4 image with the payload in its BC3 plane received the BC3 blocks directly.
+    */
+   const bool copied_transcoded = (src_image->bc_in_place && dst_image->bc_in_place &&
+                                   vk_format_no_srgb(src_image->vk.format) == vk_format_no_srgb(dst_image->vk.format)) ||
+                                  dst_image->bc4_in_bc3;
 
    if (radv_is_format_emulated(pdev, dst_image->vk.format) && cmd_buffer->qf != RADV_QUEUE_TRANSFER &&
        !copied_transcoded) {

@@ -78,6 +78,10 @@ struct radv_image {
 
    /* Xclipse: plane 1 (ASTC) aliases the BC payload of plane 0, see radv_bc_transcodes_in_place. */
    bool bc_in_place;
+   /* Xclipse BC4_UNORM: the payload is kept only as the alpha half of the BC3 blocks of plane 1,
+    * and plane 0 must not be used, see radv_bc4_keeps_payload_in_bc3.
+    */
+   bool bc4_in_bc3;
 
    struct radv_image_plane planes[0];
 };

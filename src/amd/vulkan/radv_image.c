@@ -1031,6 +1031,7 @@ radv_image_reset_layout(const struct radv_physical_device *pdev, struct radv_ima
    image->size = 0;
    image->alignment = 1;
    image->bc_in_place = false;
+   image->bc4_in_bc3 = false;
 
    image->tc_compatible_cmask = 0;
    image->fce_pred_offset = image->dcc_pred_offset = 0;
@@ -1098,6 +1099,25 @@ radv_bc_transcodes_in_place(const struct radv_physical_device *pdev, const struc
 
    return !(image->vk.usage & VK_IMAGE_USAGE_2_HOST_TRANSFER_BIT_KHR) &&
           !(image->vk.create_flags & VK_IMAGE_CREATE_2_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT_KHR);
+}
+
+/* Xclipse samples BC4_UNORM as the alpha half of BC3 blocks (radv_bc_emulation_format), and that
+ * half is the BC4 block itself.  So the BC4 payload needs no plane of its own: plane 0 shares the
+ * memory of plane 1 and is never used, copies read and write the BC4 blocks in plane 1
+ * (radv_meta_copy.c), and the image takes two thirds of the memory, what the vendor driver needs.
+ * Unlike the formats transcoded in place, a copy out of the image still returns the BC4 data.
+ * Views reinterpreting the blocks, host copies, sparse, disjoint and external images keep the
+ * separate plane.
+ */
+static bool
+radv_bc4_keeps_payload_in_bc3(const struct radv_physical_device *pdev, const struct radv_image *image)
+{
+   return radv_bc_emulation_format(pdev, image->vk.format) == VK_FORMAT_BC3_UNORM_BLOCK &&
+          !(image->vk.usage & VK_IMAGE_USAGE_2_HOST_TRANSFER_BIT_KHR) &&
+          !(image->vk.create_flags &
+            (VK_IMAGE_CREATE_2_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT_KHR | VK_IMAGE_CREATE_2_SPARSE_BINDING_BIT_KHR |
+             VK_IMAGE_CREATE_2_DISJOINT_BIT_KHR)) &&
+          !image->vk.external_handle_types;
 }
 
 /* Whether two surfaces have the same memory layout, so that one can alias the other. */
@@ -1340,6 +1360,9 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
              radv_surfaces_alias(&image->planes[0].surface, &image->planes[plane].surface, image->vk.mip_levels)) {
             offset = image->planes[0].surface.u.gfx9.surf_offset;
             image->bc_in_place = true;
+         } else if (plane == 1 && !image->disjoint && radv_bc4_keeps_payload_in_bc3(pdev, image)) {
+            offset = image->planes[0].surface.u.gfx9.surf_offset;
+            image->bc4_in_bc3 = true;
          }
       }
 
