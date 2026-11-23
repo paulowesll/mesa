@@ -275,8 +275,9 @@ radv_is_copy_image_indirect_format_supported(const struct radv_physical_device *
 
 /* Xclipse samples BC1-BC3, but returns zeros for BC4-BC7, so they are emulated (see
  * xclipse/radv_xclipse_bc.c).  Plane 1 is a format the hardware samples: ASTC 4x4, BC3 carrying BC4
- * in its alpha, or RGBA8 for the signed formats ASTC LDR cannot hold.  Returns the format of plane
- * 1, or VK_FORMAT_UNDEFINED when the format is not emulated.
+ * in its alpha, or for the signed formats, which ASTC LDR cannot hold, 8-bit SNORM texels with
+ * the channels of the format.  Returns the format of plane 1, or VK_FORMAT_UNDEFINED when the
+ * format is not emulated.
  */
 VkFormat
 radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat format)
@@ -288,8 +289,9 @@ radv_bc_emulation_format(const struct radv_physical_device *pdev, VkFormat forma
    case VK_FORMAT_BC4_UNORM_BLOCK:
       return VK_FORMAT_BC3_UNORM_BLOCK;
    case VK_FORMAT_BC4_SNORM_BLOCK:
+      return VK_FORMAT_R8_SNORM;
    case VK_FORMAT_BC5_SNORM_BLOCK:
-      return VK_FORMAT_R8G8B8A8_SNORM;
+      return VK_FORMAT_R8G8_SNORM;
    case VK_FORMAT_BC5_UNORM_BLOCK:
    case VK_FORMAT_BC7_UNORM_BLOCK:
       return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
@@ -318,7 +320,7 @@ radv_bc_emulation_swizzle(VkFormat format, VkComponentMapping *swizzle)
       *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_ZERO,
                                       VK_COMPONENT_SWIZZLE_ONE};
       return true;
-   /* The RGBA8 SNORM plane of BC4/BC5_SNORM: the unused channels come back as 0 and 1. */
+   /* The R8 and R8G8 SNORM planes of BC4/BC5_SNORM: the missing channels come back as 0 and 1. */
    case VK_FORMAT_BC4_SNORM_BLOCK:
       *swizzle = (VkComponentMapping){VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO,
                                       VK_COMPONENT_SWIZZLE_ONE};

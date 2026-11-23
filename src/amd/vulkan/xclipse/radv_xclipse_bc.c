@@ -15,7 +15,7 @@
  *    channels are independent);
  *  - BC6H is transcoded to ASTC 4x4 HDR;
  *  - BC4_UNORM becomes the alpha half of a BC3 block, which the hardware decodes;
- *  - BC4_SNORM and BC5_SNORM, which ASTC LDR cannot represent, are decoded to RGBA8.
+ *  - BC4_SNORM and BC5_SNORM, which ASTC LDR cannot represent, are decoded to R8 and R8G8 SNORM.
  */
 
 #include "radv_xclipse.h"
@@ -487,9 +487,25 @@ radv_xclipse_bc_convert(struct radv_cmd_buffer *cmd_buffer, struct radv_image *i
    const VkFormat load_format =
       vk_format_get_blocksize(format) == 16 ? VK_FORMAT_R32G32B32A32_UINT : VK_FORMAT_R32G32_UINT;
 
+   const struct radv_physical_device *pdev = radv_device_physical(device);
    const enum radv_xclipse_bc_path path = radv_xclipse_bc_path(format);
-   const VkFormat store_format =
-      path == RADV_XCLIPSE_BC_DECODE ? VK_FORMAT_R8G8B8A8_UINT : VK_FORMAT_R32G32B32A32_UINT;
+   /* Transcoded blocks are written one per texel, decoded texels as integers with the channels of
+    * plane 1 (see radv_bc_emulation_format).
+    */
+   VkFormat store_format = VK_FORMAT_R32G32B32A32_UINT;
+   if (path == RADV_XCLIPSE_BC_DECODE) {
+      switch (radv_bc_emulation_format(pdev, format)) {
+      case VK_FORMAT_R8_SNORM:
+         store_format = VK_FORMAT_R8_UINT;
+         break;
+      case VK_FORMAT_R8G8_SNORM:
+         store_format = VK_FORMAT_R8G8_UINT;
+         break;
+      default:
+         store_format = VK_FORMAT_R8G8B8A8_UINT;
+         break;
+      }
+   }
    const VkOffset3D region_offset = {offset.x, offset.y, base_slice};
    const VkExtent3D region_extent = {extent.width, extent.height, slice_count};
 
