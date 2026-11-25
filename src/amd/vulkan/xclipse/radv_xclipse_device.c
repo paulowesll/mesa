@@ -219,6 +219,10 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
 
    ac_fill_tiling_info(info, &gpu);
    ac_fill_feature_info(info, &dev);
+   /* The kernel reports TMZ, but protected memory takes the whole system down: its conformance
+    * tests made the kernel panic and the phone reboot.
+    */
+   info->has_tmz_support = false;
    ac_fill_bug_info(info);
    ac_fill_tess_info(info);
    /* With distributed tessellation, only the last wave of each HS workgroup produced output.
