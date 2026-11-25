@@ -332,6 +332,9 @@ radv_xclipse_fixup_extensions(struct vk_device_extension_table *ext)
 
    /* The vendor kernel driver has no format modifiers. */
    ext->EXT_image_drm_format_modifier = false;
+
+   /* The vendor driver does not expose it, and part of its conformance tests fail. */
+   ext->KHR_maintenance10 = false;
 }
 
 void
@@ -355,6 +358,9 @@ radv_xclipse_fixup_features(struct vk_features *features)
 
    /* Unmapped sparse texels are reported resident; the vendor driver does not expose it either. */
    features->shaderResourceResidency = false;
+
+   /* VK_KHR_maintenance10 is not exposed (radv_xclipse_fixup_extensions). */
+   features->maintenance10 = false;
 }
 
 /* Samsung's kernel driver takes a hint while shaders are compiled: it raises the minimum
