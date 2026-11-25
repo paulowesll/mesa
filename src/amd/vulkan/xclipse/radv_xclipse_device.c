@@ -37,8 +37,24 @@
 #include "vk_extensions.h"
 #include "vk_physical_device_features.h"
 
-/* The generation this port supports, the top byte of the chip revision: MGFX4, Xclipse 960. */
-#define XCLIPSE_SUPPORTED_GENERATION 4u
+/* Whether the generation of a chip revision, its top byte, runs with this port: MGFX2 (Xclipse
+ * 940/540), MGFX3 (Xclipse 950/550) and MGFX4 (Xclipse 960).  They have the register offsets of
+ * Xclipse 960 for every register the driver programs.
+ */
+static bool
+radv_xclipse_generation_supported(uint32_t chip_rev)
+{
+   switch (chip_rev >> 24) {
+   case 2:
+      /* The vendor driver handles the first MGFX2 revision like Xclipse 530. */
+      return (chip_rev & 0xffff00) != 0x600100;
+   case 3:
+   case 4:
+      return true;
+   default:
+      return false;
+   }
+}
 
 /* Topology of Xclipse 960, for a kernel that does not report one. */
 #define XCLIPSE_NUM_SE              2u
@@ -143,14 +159,14 @@ radv_xclipse_query_info(int fd, struct radeon_winsys_info *out)
       goto finish;
    }
 
-   /* The register layouts, packets and workarounds of this port all come from Xclipse 960.  Another
-    * generation would run with them and most likely hang the GPU, so it is refused instead.
+   /* The register layouts, packets and workarounds of this port all come from Xclipse 960.  Xclipse
+    * 920 has the registers at other offsets, and Xclipse 530 has not been brought up; they and later
+    * generations would most likely hang the GPU, so they are refused instead.
     */
-   if ((dev.chip_rev >> 24) != XCLIPSE_SUPPORTED_GENERATION) {
+   if (!radv_xclipse_generation_supported(dev.chip_rev)) {
       char name[32];
       radv_xclipse_marketing_name(&dev, name, sizeof(name));
-      fprintf(stderr, "radv/xclipse: %s (chip revision 0x%08x) is not supported, only Xclipse 960 is.\n", name,
-              dev.chip_rev);
+      fprintf(stderr, "radv/xclipse: %s (chip revision 0x%08x) is not supported.\n", name, dev.chip_rev);
       result = VK_ERROR_INCOMPATIBLE_DRIVER;
       goto finish;
    }
