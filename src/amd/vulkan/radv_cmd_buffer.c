@@ -14220,6 +14220,17 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer, const struct r
                                     RADV_CMD_DIRTY_VGT_PRIM_STATE;
       }
 
+      /* Xclipse writes its GS output primitive type as 0 without a geometry shader (see
+       * radv_emit_vgt_gs_out), so it changes when a geometry shader comes or goes even if
+       * vgt_outprim_type does not: triangles without one and a GS emitting strips share it.
+       */
+      const bool xclipse_has_gs = pdev->info.is_xclipse && cmd_buffer->state.shaders[MESA_SHADER_GEOMETRY];
+
+      if (cmd_buffer->state.xclipse_has_gs != xclipse_has_gs) {
+         cmd_buffer->state.xclipse_has_gs = xclipse_has_gs;
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VGT_PRIM_STATE;
+      }
+
       const uint32_t raster_prim = radv_get_raster_prim(cmd_buffer);
 
       if (cmd_buffer->state.guardband_raster_prim != raster_prim) {

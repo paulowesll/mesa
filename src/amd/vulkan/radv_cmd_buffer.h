@@ -375,6 +375,7 @@ struct radv_cmd_state {
 
    VkLineRasterizationModeEXT line_rast_mode;
    unsigned vgt_outprim_type;
+   bool xclipse_has_gs; /* Xclipse: whether the GS output primitive type was last set for a GS */
    unsigned guardband_raster_prim;
 
    uint32_t vtx_base_sgpr;
