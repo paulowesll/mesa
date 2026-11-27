@@ -445,8 +445,11 @@ radv_initialise_color_surface(struct radv_device *device, struct radv_color_buff
        */
       .fast_clear_enabled = !(RADV_DEBUG(instance, NO_FAST_CLEARS)) && !pdev->info.is_xclipse,
       .tc_compat_cmask_enabled = radv_image_is_tc_compat_cmask(iview->image),
+      /* Xclipse follows the DCC rules of GFX10.3 (radv_dcc_compat_gfx_level): copies between
+       * incompatible formats decompress DCC and then render without it.
+       */
       .dcc_enabled = radv_dcc_enabled(iview->image, iview->vk.base_mip_level) &&
-                     (pdev->info.gfx_level >= GFX11 || !iview->disable_dcc_mrt),
+                     (radv_dcc_compat_gfx_level(pdev) >= GFX11 || !iview->disable_dcc_mrt),
       .gfx10 =
          {
             .nbc_view = iview->nbc_view.valid ? &iview->nbc_view : NULL,
