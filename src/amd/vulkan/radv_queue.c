@@ -1859,8 +1859,14 @@ radv_queue_submit_normal(struct radv_queue *queue, struct vk_queue_submit *submi
          radv_check_trap_handler(queue);
       }
 
-      initial_preambles[0] = queue->state.initial_preamble_cs ? queue->state.initial_preamble_cs->b : NULL;
-      initial_preambles[1] = !use_ace ? NULL : queue->follower_state->initial_preamble_cs->b;
+      /* Only the first job waits, so the next ones need no full flush: replace the initial preambles
+       * of the leader and of the follower, at 0 and after the two gang waits, and keep the perf
+       * counter lock and the gang waits, without which the follower waits forever.
+       */
+      if (num_1q_initial_preambles)
+         initial_preambles[0] = queue->state.initial_preamble_cs->b;
+      if (use_ace)
+         initial_preambles[num_1q_initial_preambles + 2] = queue->follower_state->initial_preamble_cs->b;
    }
 
    queue->last_shader_upload_seq = MAX2(queue->last_shader_upload_seq, shader_upload_seq);
