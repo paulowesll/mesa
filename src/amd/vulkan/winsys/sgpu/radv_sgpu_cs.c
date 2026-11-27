@@ -282,8 +282,11 @@ radv_sgpu_cs_split(struct radv_sgpu_cs *cs, uint32_t *out_dw)
 
    uint32_t o = 0, chunk_start = 0, n = 0;
    for (uint32_t i = 0; i <= base->cdw;) {
+      /* PKT3_NOP_PAD, which pads streams by one dword, is a header-only NOP: its count of 0x3fff
+       * stands for no body.
+       */
       uint32_t pkt_dw = 1;
-      if (i < base->cdw && PKT_TYPE_G(base->buf[i]) == 3)
+      if (i < base->cdw && PKT_TYPE_G(base->buf[i]) == 3 && base->buf[i] != PKT3_NOP_PAD)
          pkt_dw = PKT_COUNT_G(base->buf[i]) + 2;
 
       if (i == base->cdw || i + pkt_dw - chunk_start > limit) {
